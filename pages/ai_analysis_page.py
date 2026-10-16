@@ -20,9 +20,6 @@ st.markdown(
 st.title("🤖 AI智能分析助手")
 st.caption("基于多智能体辩论的深度股票分析")
 
-st.sidebar.page_link("app.py", label="行情分析", icon="📈")
-st.sidebar.page_link("ai_analysis_page.py", label="AI智能分析", icon="🤖")
-
 col1, col2 = st.columns([2, 1])
 
 with col1:

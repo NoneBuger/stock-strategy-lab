@@ -12,8 +12,7 @@ from indicators import calculate_rsi, calculate_sma
 
 st.set_page_config(page_title="股票行情分析", page_icon="📈", layout="wide")
 st.title("股票行情分析")
-st.sidebar.page_link("app.py", label="行情分析", icon="📈")
-st.sidebar.page_link("ai_analysis_page.py", label="AI智能分析", icon="🤖")
+st.sidebar.page_link("pages/ai_analysis_page.py", label="AI智能分析", icon="🤖")
 
 stock_code = st.text_input(
     "股票代码",
