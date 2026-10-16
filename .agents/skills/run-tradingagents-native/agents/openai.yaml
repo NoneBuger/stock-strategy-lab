@@ -1,0 +1,4 @@
+interface:
+  display_name: "TradingAgents Native"
+  short_description: "Run multi-agent market research directly in Codex"
+  default_prompt: "Use $run-tradingagents-native to analyze a ticker with Codex-native analyst, debate, and risk roles."
