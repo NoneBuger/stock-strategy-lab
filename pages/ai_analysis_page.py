@@ -2,6 +2,10 @@
 
 import sys
 import time
+import json
+import os
+import urllib.error
+import urllib.request
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
@@ -24,6 +28,34 @@ st.markdown("""
 @st.cache_resource
 def get_executor() -> ThreadPoolExecutor:
     return ThreadPoolExecutor(max_workers=1)
+
+
+def run_analysis_request(stock_code: str, depth: str, enable_debate: bool,
+                         enable_risk: bool, save_history: bool) -> str:
+    """Call the configured remote backend, or use the local Codex runner."""
+    backend_url = os.getenv("AI_BACKEND_URL", "").rstrip("/")
+    if not backend_url:
+        return run_codex_analysis(stock_code, depth, enable_debate, enable_risk, save_history)
+    payload = json.dumps({
+        "stock_code": stock_code,
+        "depth": depth,
+        "enable_debate": enable_debate,
+        "enable_risk": enable_risk,
+        "save_history": save_history,
+    }).encode("utf-8")
+    request = urllib.request.Request(f"{backend_url}/analyze", data=payload,
+                                     headers={"Content-Type": "application/json"})
+    token = os.getenv("AI_BACKEND_TOKEN", "")
+    if token:
+        request.add_header("Authorization", f"Bearer {token}")
+    try:
+        with urllib.request.urlopen(request, timeout=600) as response:
+            result = json.loads(response.read().decode("utf-8"))
+        if "error" in result:
+            return f"## AI分析失败\n\n{result['error']}"
+        return result.get("report", "## AI分析失败\n\n后端未返回报告。")
+    except (urllib.error.URLError, TimeoutError) as exc:
+        return f"## AI分析失败\n\n无法连接 AI 后端：`{exc}`"
 
 
 st.title("🤖 AI智能分析助手")
@@ -50,7 +82,7 @@ with col2:
             st.session_state.stock_code = stock_code
             st.session_state.report = None
             st.session_state.analysis_future = get_executor().submit(
-                run_codex_analysis, stock_code, analysis_depth, enable_debate, enable_risk, save_history
+                run_analysis_request, stock_code, analysis_depth, enable_debate, enable_risk, save_history
             )
             st.rerun()
 

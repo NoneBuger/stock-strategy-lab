@@ -8,6 +8,7 @@ from lightweight_charts_v5 import lightweight_charts_v5_component
 
 from data_fetcher import fetch_stock_data
 from indicators import calculate_rsi, calculate_sma
+from recommendation import build_recommendation
 
 
 st.set_page_config(page_title="股票行情分析", page_icon="📈", layout="wide")
@@ -86,6 +87,20 @@ data["MACD"] = data["EMA快速"] - data["EMA慢速"]
 data["MACD信号"] = data["MACD"].ewm(span=macd_signal_period, adjust=False).mean()
 data["MACD柱"] = data["MACD"] - data["MACD信号"]
 data["RSI"] = calculate_rsi(data, period=rsi_period)
+
+try:
+    recommendation = build_recommendation(
+        data,
+        short_window=short_window,
+        long_window=long_window,
+        rsi_period=rsi_period,
+        macd_fast=macd_fast,
+        macd_slow=macd_slow,
+        macd_signal_period=macd_signal_period,
+    )
+except ValueError as error:
+    st.warning(f"暂时无法生成投资建议：{error}")
+    recommendation = None
 
 price_records = []
 for _, row in data.iterrows():
@@ -233,3 +248,34 @@ lightweight_charts_v5_component(
 )
 
 st.dataframe(data.tail(20), use_container_width=True)
+
+if recommendation:
+    st.divider()
+    st.subheader("📌 规则型投资建议")
+    st.caption(
+        f"数据日期：{recommendation['date']}；数据源：{data.attrs.get('data_source', '未知')}。"
+        "建议由当前页面的均线、MACD、RSI参数计算，不依赖AI。"
+    )
+    signal_message = f"当前信号：{recommendation['signal']}（评分 {recommendation['score']}/100）"
+    if recommendation["signal"] == "买入候选":
+        st.success(signal_message)
+    elif recommendation["signal"] == "卖出/规避":
+        st.error(signal_message)
+    else:
+        st.warning(signal_message)
+    metric_cols = st.columns(5)
+    for column, label, value, fmt in zip(
+        metric_cols,
+        ["最新收盘", f"SMA{short_window}", f"SMA{long_window}", f"RSI{rsi_period}", "MACD柱"],
+        [recommendation["price"], recommendation["sma_short"], recommendation["sma_long"], recommendation["rsi"], recommendation["macd_hist"]],
+        ["%.2f", "%.2f", "%.2f", "%.1f", "%.4f"],
+    ):
+        column.metric(label, fmt % value)
+    st.write(f"**操作建议：** {recommendation['action']}")
+    st.write("**触发依据：** " + "；".join(recommendation["reasons"]))
+    plan_cols = st.columns(3)
+    plan_cols[0].metric("参考建仓价", f"{recommendation['entry']:.2f}")
+    plan_cols[1].metric("风险止损价", f"{recommendation['stop']:.2f}")
+    plan_cols[2].metric("参考止盈价", f"{recommendation['target']:.2f}")
+    st.info("建仓建议：若出现“买入候选”，先投入计划资金30%；回踩SMA短期均线并企稳再加30%；放量突破前高再考虑剩余40%。若不是买入候选，不主动追涨。")
+    st.caption("仅供研究和程序化回测参考，不构成个性化投资建议；止损和止盈价格需结合滑点、涨跌停和T+1规则执行。")
