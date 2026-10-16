@@ -1,0 +1,4 @@
+interface:
+  display_name: "AlphaEar Finance"
+  short_description: "Research stocks, finance news, sentiment, forecasts, and reports"
+  default_prompt: "Use $alphaear-finance to analyze a stock with current prices, news, sentiment, and explicit risk notes."
