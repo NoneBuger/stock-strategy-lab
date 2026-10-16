@@ -1,5 +1,12 @@
 akshare
+akquant>=0.3.66
+baostock>=0.8
+fastmcp>=3.0
+loguru>=0.7
 numpy
 pandas
 plotly
+pydantic-settings>=2.0
 streamlit
+streamlit-lightweight-charts-v5>=0.2.0
+tenacity>=8.0
