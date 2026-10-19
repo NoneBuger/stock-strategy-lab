@@ -117,8 +117,8 @@ def load_stock_data(symbol: str) -> pd.DataFrame:
 
 
 @st.cache_data(ttl=3600, show_spinner=False)
-def load_fundamentals(symbol: str) -> dict:
-    return fetch_fundamental_snapshot(symbol)
+def load_fundamentals(symbol: str, fallback_name: str | None = None) -> dict:
+    return fetch_fundamental_snapshot(symbol, fallback_name=fallback_name)
 
 
 try:
@@ -129,7 +129,7 @@ except Exception as error:
     st.stop()
 
 try:
-    fundamentals = load_fundamentals(stock_code)
+    fundamentals = load_fundamentals(stock_code, selected_stock.get("name"))
 except Exception as error:
     fundamentals = None
     st.markdown(f"> **F10 基本面暂不可用：** `{error}`。技术建议不会据此假设公司盈利或估值安全。")

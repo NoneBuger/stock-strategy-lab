@@ -127,6 +127,22 @@ def _from_eastmoney(symbol: str) -> dict[str, Any]:
     }
 
 
+def _from_sina(symbol: str) -> dict[str, Any]:
+    """Use Sina's public quote endpoint as a lightweight name fallback."""
+    market = "sh" if symbol.startswith(("5", "6", "9")) else "sz"
+    url = f"https://hq.sinajs.cn/list={market}{symbol}"
+    request = urllib.request.Request(
+        url,
+        headers={"User-Agent": "Mozilla/5.0", "Referer": "https://finance.sina.com.cn/"},
+    )
+    with urllib.request.urlopen(request, timeout=8) as response:
+        text = response.read().decode("gbk", errors="replace")
+    match = re.search(r'="([^,]*)', text)
+    if not match or not match.group(1).strip():
+        raise ValueError("新浪公开行情未返回股票名称")
+    return {"name": match.group(1).strip(), "source": "新浪公开行情名称接口"}
+
+
 def _from_akshare(symbol: str) -> dict[str, Any]:
     import akshare as ak
 
@@ -182,12 +198,14 @@ def _from_tushare(symbol: str) -> dict[str, Any]:
     }
 
 
-def fetch_fundamental_snapshot(symbol: str) -> dict[str, Any]:
+def fetch_fundamental_snapshot(symbol: str, fallback_name: str | None = None) -> dict[str, Any]:
     """Return F10 fields and explicit screening warnings; never invent missing values."""
     errors: list[str] = []
-    snapshot: dict[str, Any] = {"symbol": symbol, "roe": None, "net_profit": None}
+    snapshot: dict[str, Any] = {
+        "symbol": symbol, "name": fallback_name, "roe": None, "net_profit": None
+    }
     sources: list[str] = []
-    for loader in (_from_tushare, _from_akshare, _from_eastmoney):
+    for loader in (_from_tushare, _from_akshare, _from_eastmoney, _from_sina):
         try:
             result = loader(symbol)
             sources.append(str(result.get("source", loader.__name__)))
@@ -201,6 +219,8 @@ def fetch_fundamental_snapshot(symbol: str) -> dict[str, Any]:
     if not sources:
         raise RuntimeError("；".join(errors) or "暂无基本面数据")
     snapshot["source"] = " + ".join(sources)
+    if not snapshot.get("name") and fallback_name:
+        snapshot["name"] = fallback_name
 
     warnings: list[str] = []
     pe = snapshot.get("pe_ttm")
