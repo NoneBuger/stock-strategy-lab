@@ -5,6 +5,7 @@ from __future__ import annotations
 import os
 import json
 import re
+import time
 import urllib.parse
 import urllib.request
 from datetime import date, timedelta
@@ -43,19 +44,33 @@ def _eastmoney_code(symbol: str) -> str:
     return f"SH{symbol}" if symbol.startswith(("5", "6", "9")) else f"SZ{symbol}"
 
 
-def _public_json(url: str) -> Any:
-    request = urllib.request.Request(
-        url,
-        headers={
-            "User-Agent": "Mozilla/5.0 (compatible; stock-strategy-lab/1.0)",
-            "Accept": "application/json,text/plain,*/*",
-        },
-    )
-    with urllib.request.urlopen(request, timeout=12) as response:
-        text = response.read().decode("utf-8-sig")
-    # Some public endpoints return JSONP even without a callback parameter.
-    text = re.sub(r"^[^(]*\(", "", text).rsplit(")", 1)[0] if not text.lstrip().startswith(("{", "[")) else text
-    return json.loads(text)
+def _public_json(url: str, timeout: int = 12, retries: int = 2) -> Any:
+    """Read a public JSON/JSONP endpoint with bounded retry and backoff."""
+    last_error: Exception | None = None
+    for attempt in range(retries + 1):
+        try:
+            request = urllib.request.Request(
+                url,
+                headers={
+                    "User-Agent": "Mozilla/5.0 (compatible; stock-strategy-lab/1.0)",
+                    "Accept": "application/json,text/plain,*/*",
+                    "Referer": "https://quote.eastmoney.com/",
+                },
+            )
+            with urllib.request.urlopen(request, timeout=timeout) as response:
+                text = response.read().decode("utf-8-sig")
+            # Some public endpoints return JSONP even without a callback parameter.
+            text = (
+                re.sub(r"^[^(]*\(", "", text).rsplit(")", 1)[0]
+                if not text.lstrip().startswith(("{", "["))
+                else text
+            )
+            return json.loads(text)
+        except Exception as error:
+            last_error = error
+            if attempt < retries:
+                time.sleep(0.6 * (attempt + 1))
+    raise RuntimeError(f"公开接口请求失败：{last_error}") from last_error
 
 
 def _records(value: Any) -> list[dict[str, Any]]:
@@ -97,10 +112,16 @@ def _from_eastmoney(symbol: str) -> dict[str, Any]:
         raise ValueError("东方财富行情接口未返回股票数据")
 
     em_code = _eastmoney_code(symbol)
-    survey_url = f"https://emweb.securities.eastmoney.com/PC_HSF10/CompanySurvey/CompanySurveyAjax?code={em_code}"
-    survey_records = _records(_public_json(survey_url))
-    industry = _find_in_records(survey_records, "INDUSTRYNAME", "INDUSTRY_NAME", "行业", "所属行业")
-    name = quote.get("f58") or _find_in_records(survey_records, "SECURITYNAMEABBR", "SECURITY_NAME_ABBR", "股票简称")
+    industry = None
+    name = quote.get("f58")
+    try:
+        survey_url = f"https://emweb.securities.eastmoney.com/PC_HSF10/CompanySurvey/CompanySurveyAjax?code={em_code}"
+        survey_records = _records(_public_json(survey_url))
+        industry = _find_in_records(survey_records, "INDUSTRYNAME", "INDUSTRY_NAME", "行业", "所属行业")
+        name = name or _find_in_records(survey_records, "SECURITYNAMEABBR", "SECURITY_NAME_ABBR", "股票简称")
+    except Exception:
+        # Quote data remains useful when the F10 company page is unavailable.
+        pass
 
     # Financial data is supplementary: an unavailable financial endpoint does
     # not invalidate the quote/company snapshot.
@@ -108,7 +129,7 @@ def _from_eastmoney(symbol: str) -> dict[str, Any]:
     net_profit = None
     try:
         finance_url = f"https://emweb.securities.eastmoney.com/PC_HSF10/NewFinanceAnalysis/ZYZBAjaxNew?type=0&code={em_code}"
-        finance_records = _records(_public_json(finance_url))
+        finance_records = _records(_public_json(finance_url, timeout=15))
         roe = _number(_find_in_records(finance_records, "ROEJQ", "ROE", "净资产收益率"))
         net_profit = _number(_find_in_records(finance_records, "归母净利润", "归属于母公司股东的净利润", "净利润"))
     except Exception:
@@ -201,11 +222,19 @@ def _from_tushare(symbol: str) -> dict[str, Any]:
 def fetch_fundamental_snapshot(symbol: str, fallback_name: str | None = None) -> dict[str, Any]:
     """Return F10 fields and explicit screening warnings; never invent missing values."""
     errors: list[str] = []
+    usable_fallback_name = (
+        fallback_name
+        if fallback_name and "名称待数据源返回" not in str(fallback_name)
+        else None
+    )
     snapshot: dict[str, Any] = {
-        "symbol": symbol, "name": fallback_name, "roe": None, "net_profit": None
+        "symbol": symbol, "name": usable_fallback_name, "roe": None, "net_profit": None
     }
     sources: list[str] = []
-    for loader in (_from_tushare, _from_akshare, _from_eastmoney, _from_sina):
+    loaders = [_from_tushare, _from_akshare, _from_eastmoney]
+    if not snapshot.get("name"):
+        loaders.append(_from_sina)
+    for loader in loaders:
         try:
             result = loader(symbol)
             sources.append(str(result.get("source", loader.__name__)))
@@ -216,11 +245,13 @@ def fetch_fundamental_snapshot(symbol: str, fallback_name: str | None = None) ->
                     snapshot[key] = value
         except Exception as exc:
             errors.append(str(exc))
+    if not sources and usable_fallback_name:
+        sources.append("搜索结果名称兜底")
     if not sources:
         raise RuntimeError("；".join(errors) or "暂无基本面数据")
     snapshot["source"] = " + ".join(sources)
-    if not snapshot.get("name") and fallback_name:
-        snapshot["name"] = fallback_name
+    if not snapshot.get("name") and usable_fallback_name:
+        snapshot["name"] = usable_fallback_name
 
     warnings: list[str] = []
     pe = snapshot.get("pe_ttm")
@@ -237,6 +268,18 @@ def fetch_fundamental_snapshot(symbol: str, fallback_name: str | None = None) ->
     for error in errors:
         if error and "未配置" not in error:
             warnings.append(f"部分数据源不可用：{error}")
+    missing_fields = [
+        label for key, label in (
+            ("industry", "行业"),
+            ("pe_ttm", "市盈率"),
+            ("roe", "ROE"),
+            ("net_profit", "归母净利润"),
+        ) if snapshot.get(key) in (None, "")
+    ]
+    if missing_fields:
+        warnings.append(f"部分F10字段暂无有效数据：{'、'.join(missing_fields)}")
     snapshot["warnings"] = warnings
+    snapshot["source_errors"] = errors
+    snapshot["data_status"] = "完整数据" if not missing_fields else "部分数据"
     snapshot["is_loss"] = bool(net_profit is not None and net_profit < 0)
     return snapshot

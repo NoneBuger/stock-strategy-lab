@@ -345,10 +345,14 @@ with st.expander("📋 F10 基本面快照与排雷", expanded=True):
             f"- **总市值：** {_show(fundamentals.get('market_cap'))}\n"
             f"- **ROE：** {_show(fundamentals.get('roe'))}\n"
             f"- **归母净利润：** {_show(fundamentals.get('net_profit'))}\n"
+            f"- **数据状态：** {_show(fundamentals.get('data_status'))}\n"
             f"- **数据来源：** {_show(fundamentals.get('source'))}"
         )
         if fundamentals.get("warnings"):
-            st.error("；".join(fundamentals["warnings"]))
+            if fundamentals.get("is_loss"):
+                st.error("；".join(fundamentals["warnings"]))
+            else:
+                st.warning("；".join(fundamentals["warnings"]))
         else:
             st.success("当前可用 F10 字段未触发基础排雷规则；仍需结合财报和公告核实。")
     else:

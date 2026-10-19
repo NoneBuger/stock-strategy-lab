@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import os
 
+from stock_catalog import OFFLINE_STOCK_NAMES
+
 
 def search_stock_candidates(query: str, limit: int = 20) -> list[dict[str, str]]:
     """Fuzzy-search A-share code/name pairs from available providers."""
@@ -19,6 +21,9 @@ def search_stock_candidates(query: str, limit: int = 20) -> list[dict[str, str]]
         code_fallback = None
 
     candidates: dict[str, str] = {}
+    for code, name in OFFLINE_STOCK_NAMES.items():
+        if query in code.lower() or query in name.lower():
+            candidates[code] = name
     try:
         import akshare as ak
 
