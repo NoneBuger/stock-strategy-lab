@@ -64,9 +64,14 @@ def build_recommendation(
     else:
         signal, action = "观望", "等待均线、MACD和RSI形成共振"
 
-    entry = price if signal == "买入候选" else sma_short
-    stop = min(entry * 0.92, sma_long * 0.98)
-    target = entry * 1.15
+    is_entry_candidate = signal == "买入候选"
+    # Only a buy-candidate has an actionable entry price. For other states,
+    # SMA20 is merely a watch/pullback reference and must not be shown as a
+    # tradable cost basis.
+    entry = price if is_entry_candidate else None
+    watch_price = sma_short if signal in {"持有观察", "观望"} else None
+    stop = min(price * 0.92, sma_long * 0.98) if is_entry_candidate else None
+    target = price * 1.15 if is_entry_candidate else None
     return {
         "date": pd.to_datetime(latest["日期"]).strftime("%Y-%m-%d"),
         "price": price, "sma_short": sma_short, "sma_long": sma_long,
@@ -74,7 +79,10 @@ def build_recommendation(
         "volume_ratio": float(latest["volume_ratio"]) if pd.notna(latest["volume_ratio"]) else None,
         "golden_cross": bool(golden_cross), "death_cross": bool(death_cross),
         "score": int(score), "signal": signal, "action": action,
-        "entry": float(entry), "stop": float(stop), "target": float(target),
+        "entry": float(entry) if entry is not None else None,
+        "watch_price": float(watch_price) if watch_price is not None else None,
+        "stop": float(stop) if stop is not None else None,
+        "target": float(target) if target is not None else None,
         "reasons": [
             f"SMA{short_window}{'上方' if trend_up else '下方'}SMA{long_window}",
             f"MACD柱{'偏强' if macd_bullish else '偏弱'}",

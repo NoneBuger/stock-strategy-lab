@@ -9,6 +9,8 @@ import shutil
 import subprocess
 from pathlib import Path
 
+from strategy_config import format_strategy_prompt
+
 DEPTHS = {"快速": "quick", "标准": "standard", "深度": "deep"}
 
 
@@ -17,7 +19,8 @@ def _error(message: str) -> str:
 
 
 def run_codex_analysis(stock_code: str, depth: str = "标准", enable_debate: bool = True,
-                       enable_risk: bool = True, save_history: bool = True) -> str:
+                       enable_risk: bool = True, save_history: bool = True,
+                       strategy_name: str = "中线趋势") -> str:
     """Execute the native TradingAgents skill and return its Markdown report."""
     stock_code = str(stock_code).strip()
     if not re.fullmatch(r"\d{6}", stock_code):
@@ -29,11 +32,14 @@ def run_codex_analysis(stock_code: str, depth: str = "标准", enable_debate: bo
     codex = shutil.which("codex")
     if not codex:
         return _error("当前运行环境没有找到 `codex` 命令。Streamlit Cloud 通常不提供 Codex CLI 及其登录凭据，因此无法直接执行该技能。请将本页面连接到已认证的后端，或在带有 Codex CLI 的运行环境中部署。")
+    strategy_prompt = format_strategy_prompt(strategy_name)
     prompt = f"""请使用 run-tradingagents-native 技能，分析A股股票 {stock_code}，生成中文、结构化的投研报告。
 分析深度：{depth}（{DEPTHS.get(depth, 'standard')}）。
 启用牛熊辩论：{'是' if enable_debate else '否'}。
 启用风险评估：{'是' if enable_risk else '否'}。
 保存历史记录：{'是' if save_history else '否'}。
+请严格参考以下策略模型，但不要把规则信号当作确定性预测：
+{strategy_prompt}
 报告必须标注数据来源、数据时间、关键不确定性，并明确说明不构成投资建议。"""
     try:
         result = subprocess.run([codex, "exec", "-C", str(project_root),

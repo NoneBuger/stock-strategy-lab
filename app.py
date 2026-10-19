@@ -8,6 +8,7 @@ from data_fetcher import fetch_stock_data
 from indicators import calculate_rsi, calculate_sma
 from recommendation import build_recommendation
 from stock_search import search_stock_candidates
+from strategy_config import STRATEGY_NAMES, get_strategy_config
 
 
 st.set_page_config(page_title="股票行情分析", page_icon="📈", layout="wide")
@@ -49,22 +50,29 @@ stock_code = selected_stock["code"]
 
 with st.sidebar:
     st.header("图表参数")
-    short_window = st.slider("短期均线周期", min_value=2, max_value=120, value=20)
-    long_window = st.slider("长期均线周期", min_value=5, max_value=250, value=60)
+    selected_model_name = st.selectbox("策略模型", STRATEGY_NAMES, key="strategy_model")
+    selected_model = get_strategy_config(selected_model_name)
+    st.caption(f"适用周期：{selected_model['suitable_period']}\n\n{selected_model['description']}")
+    short_window = st.slider("短期均线周期", min_value=2, max_value=120,
+                             value=selected_model["short_window"],
+                             key=f"short_window_{selected_model_name}")
+    long_window = st.slider("长期均线周期", min_value=5, max_value=250,
+                            value=selected_model["long_window"],
+                            key=f"long_window_{selected_model_name}")
     if short_window >= long_window:
         st.error("长期均线周期必须大于短期均线周期。")
         st.stop()
 
     st.subheader("MACD")
-    macd_fast = st.slider("快速EMA", 2, 50, 12)
-    macd_slow = st.slider("慢速EMA", 5, 100, 26)
-    macd_signal_period = st.slider("信号线EMA", 2, 30, 9)
+    macd_fast = st.slider("快速EMA", 2, 50, selected_model["macd_fast"], key=f"macd_fast_{selected_model_name}")
+    macd_slow = st.slider("慢速EMA", 5, 100, selected_model["macd_slow"], key=f"macd_slow_{selected_model_name}")
+    macd_signal_period = st.slider("信号线EMA", 2, 30, selected_model["macd_signal_period"], key=f"macd_signal_{selected_model_name}")
     if macd_fast >= macd_slow:
         st.error("MACD慢速EMA必须大于快速EMA。")
         st.stop()
 
     st.subheader("RSI")
-    rsi_period = st.slider("RSI周期", 2, 50, 14)
+    rsi_period = st.slider("RSI周期", 2, 50, selected_model["rsi_period"], key=f"rsi_period_{selected_model_name}")
 
 
 @st.cache_data(ttl=3600, show_spinner=False)
@@ -295,8 +303,17 @@ if recommendation:
     st.write(f"**操作建议：** {recommendation['action']}")
     st.write("**触发依据：** " + "；".join(recommendation["reasons"]))
     plan_cols = st.columns(3)
-    plan_cols[0].metric("参考建仓价", f"{recommendation['entry']:.2f}")
-    plan_cols[1].metric("风险止损价", f"{recommendation['stop']:.2f}")
-    plan_cols[2].metric("参考止盈价", f"{recommendation['target']:.2f}")
+    if recommendation["signal"] == "买入候选":
+        plan_cols[0].metric("参考成交价", f"{recommendation['entry']:.2f}")
+        plan_cols[1].metric("风险止损价", f"{recommendation['stop']:.2f}")
+        plan_cols[2].metric("参考止盈价", f"{recommendation['target']:.2f}")
+    else:
+        plan_cols[0].metric("当前建仓价", "不适用")
+        plan_cols[1].metric("风险止损价", "等待建仓")
+        plan_cols[2].metric("参考止盈价", "等待建仓")
+        if recommendation["watch_price"] is not None:
+            st.caption(
+                f"观察/回踩参考价：{recommendation['watch_price']:.2f}（不是当前成交价，也不是建仓指令）"
+            )
     st.info("建仓建议：若出现“买入候选”，先投入计划资金30%；回踩SMA短期均线并企稳再加30%；放量突破前高再考虑剩余40%。若不是买入候选，不主动追涨。")
-    st.caption("仅供研究和程序化回测参考，不构成个性化投资建议；止损和止盈价格需结合滑点、涨跌停和T+1规则执行。")
+    st.caption("模型按日线收盘价生成信号，未把手续费、滑点和涨跌停排队纳入报价；实际成交成本可能不同，不构成个性化投资建议。")

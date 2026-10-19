@@ -16,6 +16,7 @@ if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 from run_analysis import run_codex_analysis
 from stock_search import search_stock_candidates
+from strategy_config import STRATEGY_NAMES
 
 st.set_page_config(layout="wide", page_title="AI智能分析", page_icon="🤖")
 st.markdown("""
@@ -37,17 +38,21 @@ def search_candidates(query: str) -> list[dict[str, str]]:
 
 
 def run_analysis_request(stock_code: str, depth: str, enable_debate: bool,
-                         enable_risk: bool, save_history: bool) -> str:
+                         enable_risk: bool, save_history: bool,
+                         strategy_name: str) -> str:
     """Call the configured remote backend, or use the local Codex runner."""
     backend_url = os.getenv("AI_BACKEND_URL", "").rstrip("/")
     if not backend_url:
-        return run_codex_analysis(stock_code, depth, enable_debate, enable_risk, save_history)
+        return run_codex_analysis(
+            stock_code, depth, enable_debate, enable_risk, save_history, strategy_name
+        )
     payload = json.dumps({
         "stock_code": stock_code,
         "depth": depth,
         "enable_debate": enable_debate,
         "enable_risk": enable_risk,
         "save_history": save_history,
+        "strategy_name": strategy_name,
     }).encode("utf-8")
     request = urllib.request.Request(f"{backend_url}/analyze", data=payload,
                                      headers={"Content-Type": "application/json"})
@@ -87,6 +92,7 @@ with col1:
     else:
         selected_stock = None
     analysis_depth = st.select_slider("分析深度", options=["快速", "标准", "深度"], value="标准")
+    selected_strategy = st.selectbox("策略模型", STRATEGY_NAMES, key="ai_strategy_model")
     with st.expander("高级选项"):
         enable_debate = st.checkbox("启用牛熊辩论", value=True)
         enable_risk = st.checkbox("启用风险评估", value=True)
@@ -104,7 +110,8 @@ with col2:
             st.session_state.stock_code = stock_code
             st.session_state.report = None
             st.session_state.analysis_future = get_executor().submit(
-                run_analysis_request, stock_code, analysis_depth, enable_debate, enable_risk, save_history
+                run_analysis_request, stock_code, analysis_depth, enable_debate, enable_risk, save_history,
+                selected_strategy,
             )
             st.rerun()
 
@@ -132,3 +139,6 @@ if st.session_state.get("report"):
         file_name=f"{st.session_state.get('stock_code', 'stock')}_AI分析报告.md",
         mime="text/markdown",
     )
+
+st.divider()
+st.caption("免责声明：本页面内容由规则模型和可用数据生成，仅供研究和教育参考，不构成投资、买卖或收益保证。投资者应独立核实数据并自行承担决策风险。")
