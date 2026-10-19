@@ -15,7 +15,7 @@ PROJECT_ROOT = Path(__file__).resolve().parents[1]
 if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 from run_analysis import run_codex_analysis
-from data_fetcher import search_stock_candidates
+from stock_search import search_stock_candidates
 
 st.set_page_config(layout="wide", page_title="AI智能分析", page_icon="🤖")
 st.markdown("""

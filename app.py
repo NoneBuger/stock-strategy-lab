@@ -4,9 +4,10 @@ import pandas as pd
 import streamlit as st
 from lightweight_charts_v5 import lightweight_charts_v5_component
 
-from data_fetcher import fetch_stock_data, search_stock_candidates
+from data_fetcher import fetch_stock_data
 from indicators import calculate_rsi, calculate_sma
 from recommendation import build_recommendation
+from stock_search import search_stock_candidates
 
 
 st.set_page_config(page_title="股票行情分析", page_icon="📈", layout="wide")
