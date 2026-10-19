@@ -34,43 +34,24 @@ st.page_link("pages/ai_analysis_page.py", label="打开 AI 智能分析", icon="
 
 
 with st.sidebar:
-    st.header("策略与图表参数")
-    selected_model_name = st.selectbox("投资建议模型", STRATEGY_NAMES, key="strategy_model")
-    selected_model = get_strategy_config(selected_model_name)
-    st.markdown(
-        f"**适用周期：** {selected_model['suitable_period']}\n\n"
-        f"{selected_model['description']}"
-    )
-    short_window = st.slider(
-        "短期均线周期", min_value=2, max_value=120,
-        value=selected_model["short_window"], key=f"short_window_{selected_model_name}"
-    )
-    long_window = st.slider(
-        "长期均线周期", min_value=5, max_value=250,
-        value=selected_model["long_window"], key=f"long_window_{selected_model_name}"
-    )
+    st.header("图表参数")
+    st.markdown("模型建议将同时展示六种内置策略；以下参数用于行情图表。")
+    short_window = st.slider("短期均线周期", min_value=2, max_value=120, value=20, key="chart_short_window")
+    long_window = st.slider("长期均线周期", min_value=5, max_value=250, value=60, key="chart_long_window")
     if short_window >= long_window:
         st.markdown("> **参数错误：** 长期均线周期必须大于短期均线周期。")
         st.stop()
 
     st.subheader("MACD")
-    macd_fast = st.slider(
-        "快速EMA", 2, 50, selected_model["macd_fast"], key=f"macd_fast_{selected_model_name}"
-    )
-    macd_slow = st.slider(
-        "慢速EMA", 5, 100, selected_model["macd_slow"], key=f"macd_slow_{selected_model_name}"
-    )
-    macd_signal_period = st.slider(
-        "信号线EMA", 2, 30, selected_model["macd_signal_period"], key=f"macd_signal_{selected_model_name}"
-    )
+    macd_fast = st.slider("快速EMA", 2, 50, 12, key="chart_macd_fast")
+    macd_slow = st.slider("慢速EMA", 5, 100, 26, key="chart_macd_slow")
+    macd_signal_period = st.slider("信号线EMA", 2, 30, 9, key="chart_macd_signal")
     if macd_fast >= macd_slow:
         st.markdown("> **参数错误：** MACD慢速EMA必须大于快速EMA。")
         st.stop()
 
     st.subheader("RSI")
-    rsi_period = st.slider(
-        "RSI周期", 2, 50, selected_model["rsi_period"], key=f"rsi_period_{selected_model_name}"
-    )
+    rsi_period = st.slider("RSI周期", 2, 50, 14, key="chart_rsi_period")
 
 
 @st.cache_data(ttl=3600, show_spinner=False)
@@ -148,19 +129,22 @@ data["MACD信号"] = data["MACD"].ewm(span=macd_signal_period, adjust=False).mea
 data["MACD柱"] = data["MACD"] - data["MACD信号"]
 data["RSI"] = calculate_rsi(data, period=rsi_period)
 
-try:
-    recommendation = build_recommendation(
-        data,
-        short_window=short_window,
-        long_window=long_window,
-        rsi_period=rsi_period,
-        macd_fast=macd_fast,
-        macd_slow=macd_slow,
-        macd_signal_period=macd_signal_period,
-    )
-except ValueError as error:
-    st.markdown(f"> **暂时无法生成投资建议：** `{error}`")
-    recommendation = None
+recommendations: dict[str, dict] = {}
+recommendation_errors: dict[str, str] = {}
+for model_name in STRATEGY_NAMES:
+    model = get_strategy_config(model_name)
+    try:
+        recommendations[model_name] = build_recommendation(
+            data,
+            short_window=model["short_window"],
+            long_window=model["long_window"],
+            rsi_period=model["rsi_period"],
+            macd_fast=model["macd_fast"],
+            macd_slow=model["macd_slow"],
+            macd_signal_period=model["macd_signal_period"],
+        )
+    except ValueError as error:
+        recommendation_errors[model_name] = str(error)
 
 price_records = []
 for _, row in data.iterrows():
@@ -309,52 +293,50 @@ lightweight_charts_v5_component(
 
 st.dataframe(data.tail(20), use_container_width=True)
 
-if recommendation:
-    st.divider()
-    st.subheader("📌 规则型投资建议")
-    st.caption(
-        f"数据日期：{recommendation['date']}；数据源：{data.attrs.get('data_source', '未知')}。"
-        "建议由当前页面的均线、MACD、RSI参数计算，不依赖AI。"
-    )
-    signal_message = f"当前信号：{recommendation['signal']}（评分 {recommendation['score']}/100）"
-    if recommendation["signal"] == "买入候选":
-        st.success(signal_message)
-    elif recommendation["signal"] == "卖出/规避":
-        st.error(signal_message)
-    else:
-        st.warning(signal_message)
-    metric_tabs = st.tabs(["最新收盘", f"SMA{short_window}", f"SMA{long_window}", f"RSI{rsi_period}", "MACD柱"])
-    for tab, label, value, fmt in zip(
-        metric_tabs,
-        ["最新收盘", f"SMA{short_window}", f"SMA{long_window}", f"RSI{rsi_period}", "MACD柱"],
-        [recommendation["price"], recommendation["sma_short"], recommendation["sma_long"], recommendation["rsi"], recommendation["macd_hist"]],
-        ["%.2f", "%.2f", "%.2f", "%.1f", "%.4f"],
-    ):
-        with tab:
-            st.metric(label, fmt % value)
-    st.write(f"**操作建议：** {recommendation['action']}")
-    st.write("**触发依据：** " + "；".join(recommendation["reasons"]))
-    plan_tabs = st.tabs(["成交/建仓", "风险止损", "参考止盈"])
-    if recommendation["signal"] == "买入候选":
-        with plan_tabs[0]:
-            st.metric("参考成交价", f"{recommendation['entry']:.2f}")
-        with plan_tabs[1]:
-            st.metric("风险止损价", f"{recommendation['stop']:.2f}")
-        with plan_tabs[2]:
-            st.metric("参考止盈价", f"{recommendation['target']:.2f}")
-    else:
-        with plan_tabs[0]:
-            st.metric("当前建仓价", "不适用")
-        with plan_tabs[1]:
-            st.metric("风险止损价", "等待建仓")
-        with plan_tabs[2]:
-            st.metric("参考止盈价", "等待建仓")
-        # ``get`` keeps the UI compatible with cached results generated by an
-        # older recommendation module that did not expose watch_price.
-        watch_price = recommendation.get("watch_price")
-        if watch_price is not None:
-            st.caption(
-                f"观察/回踩参考价：{watch_price:.2f}（不是当前成交价，也不是建仓指令）"
+st.divider()
+st.subheader("📌 六模型投资建议参考")
+st.markdown(
+    f"数据日期：{max(item['date'] for item in recommendations.values()) if recommendations else '未知'}；"
+    f"数据源：{data.attrs.get('data_source', '未知')}。以下结果由本地规则计算，不依赖 AI。"
+)
+model_tabs = st.tabs(list(STRATEGY_NAMES))
+for model_tab, model_name in zip(model_tabs, STRATEGY_NAMES):
+    with model_tab:
+        model = get_strategy_config(model_name)
+        st.markdown(
+            f"**适用周期：** {model['suitable_period']}  \n"
+            f"**参数：** 均线 {model['short_window']}/{model['long_window']}，"
+            f"RSI {model['rsi_period']}，MACD {model['macd_fast']}/{model['macd_slow']}/{model['macd_signal_period']}"
+        )
+        recommendation = recommendations.get(model_name)
+        if recommendation is None:
+            st.error(f"{model_name} 暂时无法计算：{recommendation_errors.get(model_name, '数据不足')}")
+            continue
+        signal_message = f"当前信号：{recommendation['signal']}（评分 {recommendation['score']}/100）"
+        if recommendation["signal"] == "买入候选":
+            st.success(signal_message)
+        elif recommendation["signal"] == "卖出/规避":
+            st.error(signal_message)
+        else:
+            st.warning(signal_message)
+        st.markdown(
+            f"- 最新收盘：**{recommendation['price']:.2f}**\n"
+            f"- 短期均线：**{recommendation['sma_short']:.2f}**\n"
+            f"- 长期均线：**{recommendation['sma_long']:.2f}**\n"
+            f"- RSI：**{recommendation['rsi']:.1f}**\n"
+            f"- MACD柱：**{recommendation['macd_hist']:.4f}**\n"
+            f"- 操作建议：**{recommendation['action']}**\n"
+            f"- 触发依据：{'；'.join(recommendation['reasons'])}"
+        )
+        if recommendation["signal"] == "买入候选":
+            st.markdown(
+                f"**参考成交价：** {recommendation['entry']:.2f}　"
+                f"**止损：** {recommendation['stop']:.2f}　"
+                f"**止盈：** {recommendation['target']:.2f}"
             )
-    st.markdown("**建仓建议：** 若出现“买入候选”，先投入计划资金30%；回踩短期均线并企稳再加30%；放量突破前高再考虑剩余40%。若不是买入候选，不主动追涨。")
-    st.markdown("> 模型按日线收盘价生成信号，未把手续费、滑点和涨跌停排队纳入报价；实际成交成本可能不同，不构成个性化投资建议。")
+        elif recommendation.get("watch_price") is not None:
+            st.markdown(f"**观察/回踩参考价：** {recommendation['watch_price']:.2f}（不是建仓指令）")
+        st.markdown(
+            f"> **风控：** 止损参考 {model['stop_loss_pct']:.0%}，"
+            f"目标收益参考 {model['take_profit_pct']:.0%}；仅供研究，不构成投资建议。"
+        )
