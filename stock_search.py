@@ -11,6 +11,13 @@ def search_stock_candidates(query: str, limit: int = 20) -> list[dict[str, str]]
     if not query:
         return []
 
+    # Keep the controls usable when a quote provider is temporarily
+    # unavailable. Historical data loading will still report its own error.
+    if query.isdigit() and len(query) == 6:
+        code_fallback = query
+    else:
+        code_fallback = None
+
     candidates: dict[str, str] = {}
     try:
         import akshare as ak
@@ -41,7 +48,10 @@ def search_stock_candidates(query: str, limit: int = 20) -> list[dict[str, str]]
         except Exception:
             pass
 
-    return [
+    results = [
         {"code": code, "name": name}
         for code, name in sorted(candidates.items())
     ][: max(1, limit)]
+    if not results and code_fallback:
+        return [{"code": code_fallback, "name": "代码匹配（名称待数据源返回）"}]
+    return results

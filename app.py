@@ -30,6 +30,47 @@ st.markdown(
 )
 st.title("股票行情分析")
 st.sidebar.page_link("pages/ai_analysis_page.py", label="AI智能分析", icon="🤖")
+st.page_link("pages/ai_analysis_page.py", label="打开 AI 智能分析", icon="🤖")
+
+
+with st.sidebar:
+    st.header("策略与图表参数")
+    selected_model_name = st.selectbox("投资建议模型", STRATEGY_NAMES, key="strategy_model")
+    selected_model = get_strategy_config(selected_model_name)
+    st.markdown(
+        f"**适用周期：** {selected_model['suitable_period']}\n\n"
+        f"{selected_model['description']}"
+    )
+    short_window = st.slider(
+        "短期均线周期", min_value=2, max_value=120,
+        value=selected_model["short_window"], key=f"short_window_{selected_model_name}"
+    )
+    long_window = st.slider(
+        "长期均线周期", min_value=5, max_value=250,
+        value=selected_model["long_window"], key=f"long_window_{selected_model_name}"
+    )
+    if short_window >= long_window:
+        st.markdown("> **参数错误：** 长期均线周期必须大于短期均线周期。")
+        st.stop()
+
+    st.subheader("MACD")
+    macd_fast = st.slider(
+        "快速EMA", 2, 50, selected_model["macd_fast"], key=f"macd_fast_{selected_model_name}"
+    )
+    macd_slow = st.slider(
+        "慢速EMA", 5, 100, selected_model["macd_slow"], key=f"macd_slow_{selected_model_name}"
+    )
+    macd_signal_period = st.slider(
+        "信号线EMA", 2, 30, selected_model["macd_signal_period"], key=f"macd_signal_{selected_model_name}"
+    )
+    if macd_fast >= macd_slow:
+        st.markdown("> **参数错误：** MACD慢速EMA必须大于快速EMA。")
+        st.stop()
+
+    st.subheader("RSI")
+    rsi_period = st.slider(
+        "RSI周期", 2, 50, selected_model["rsi_period"], key=f"rsi_period_{selected_model_name}"
+    )
 
 
 @st.cache_data(ttl=3600, show_spinner=False)
@@ -63,32 +104,6 @@ else:
     st.caption(f"已匹配：{selected_stock['code']} - {selected_stock['name']}")
 
 stock_code = selected_stock["code"]
-
-with st.sidebar:
-    st.header("图表参数")
-    selected_model_name = st.selectbox("策略模型", STRATEGY_NAMES, key="strategy_model")
-    selected_model = get_strategy_config(selected_model_name)
-    st.caption(f"适用周期：{selected_model['suitable_period']}\n\n{selected_model['description']}")
-    short_window = st.slider("短期均线周期", min_value=2, max_value=120,
-                             value=selected_model["short_window"],
-                             key=f"short_window_{selected_model_name}")
-    long_window = st.slider("长期均线周期", min_value=5, max_value=250,
-                            value=selected_model["long_window"],
-                            key=f"long_window_{selected_model_name}")
-    if short_window >= long_window:
-        st.markdown("> **参数错误：** 长期均线周期必须大于短期均线周期。")
-        st.stop()
-
-    st.subheader("MACD")
-    macd_fast = st.slider("快速EMA", 2, 50, selected_model["macd_fast"], key=f"macd_fast_{selected_model_name}")
-    macd_slow = st.slider("慢速EMA", 5, 100, selected_model["macd_slow"], key=f"macd_slow_{selected_model_name}")
-    macd_signal_period = st.slider("信号线EMA", 2, 30, selected_model["macd_signal_period"], key=f"macd_signal_{selected_model_name}")
-    if macd_fast >= macd_slow:
-        st.markdown("> **参数错误：** MACD慢速EMA必须大于快速EMA。")
-        st.stop()
-
-    st.subheader("RSI")
-    rsi_period = st.slider("RSI周期", 2, 50, selected_model["rsi_period"], key=f"rsi_period_{selected_model_name}")
 
 
 @st.cache_data(ttl=3600, show_spinner=False)
