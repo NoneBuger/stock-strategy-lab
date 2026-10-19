@@ -15,6 +15,7 @@ PROJECT_ROOT = Path(__file__).resolve().parents[1]
 if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 from run_analysis import run_codex_analysis
+from data_fetcher import search_stock_candidates
 
 st.set_page_config(layout="wide", page_title="AI智能分析", page_icon="🤖")
 st.markdown("""
@@ -28,6 +29,11 @@ st.markdown("""
 @st.cache_resource
 def get_executor() -> ThreadPoolExecutor:
     return ThreadPoolExecutor(max_workers=1)
+
+
+@st.cache_data(ttl=3600, show_spinner=False)
+def search_candidates(query: str) -> list[dict[str, str]]:
+    return search_stock_candidates(query)
 
 
 def run_analysis_request(stock_code: str, depth: str, enable_debate: bool,
@@ -64,7 +70,22 @@ col1, col2 = st.columns([2, 1])
 
 with col1:
     st.subheader("分析设置")
-    stock_code = st.text_input("股票代码", value="000001", max_chars=6, help="输入6位A股代码").strip()
+    stock_query = st.text_input(
+        "股票名称或代码", value="000001", help="支持输入六位代码或股票名称"
+    ).strip()
+    stock_candidates = search_candidates(stock_query) if stock_query else []
+    if len(stock_candidates) > 1:
+        selected_stock = st.selectbox(
+            "匹配到多只股票，请选择",
+            stock_candidates,
+            format_func=lambda item: f"{item['code']} - {item['name']}",
+            key="ai_stock_selection",
+        )
+    elif stock_candidates:
+        selected_stock = stock_candidates[0]
+        st.caption(f"已匹配：{selected_stock['code']} - {selected_stock['name']}")
+    else:
+        selected_stock = None
     analysis_depth = st.select_slider("分析深度", options=["快速", "标准", "深度"], value="标准")
     with st.expander("高级选项"):
         enable_debate = st.checkbox("启用牛熊辩论", value=True)
@@ -74,11 +95,12 @@ with col1:
 with col2:
     st.subheader("操作")
     if st.button("🚀 开始AI分析", type="primary", use_container_width=True):
-        if len(stock_code) != 6 or not stock_code.isdigit():
-            st.error("请输入有效的6位A股股票代码。")
+        if selected_stock is None:
+            st.error("请输入可匹配的股票名称或代码。")
         elif st.session_state.get("analysis_future") is not None:
             st.warning("已有分析任务正在运行，请稍候。")
         else:
+            stock_code = selected_stock["code"]
             st.session_state.stock_code = stock_code
             st.session_state.report = None
             st.session_state.analysis_future = get_executor().submit(

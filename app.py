@@ -1,12 +1,10 @@
 """Interactive Streamlit dashboard with TradingView Lightweight Charts."""
 
-import re
-
 import pandas as pd
 import streamlit as st
 from lightweight_charts_v5 import lightweight_charts_v5_component
 
-from data_fetcher import fetch_stock_data
+from data_fetcher import fetch_stock_data, search_stock_candidates
 from indicators import calculate_rsi, calculate_sma
 from recommendation import build_recommendation
 
@@ -15,16 +13,38 @@ st.set_page_config(page_title="股票行情分析", page_icon="📈", layout="wi
 st.title("股票行情分析")
 st.sidebar.page_link("pages/ai_analysis_page.py", label="AI智能分析", icon="🤖")
 
-stock_code = st.text_input(
-    "股票代码",
+
+@st.cache_data(ttl=3600, show_spinner=False)
+def search_candidates(query: str) -> list[dict[str, str]]:
+    return search_stock_candidates(query)
+
+stock_query = st.text_input(
+    "股票名称或代码",
     value="000001",
-    max_chars=6,
-    help="请输入6位A股股票代码，例如 000001。",
+    help="支持输入六位代码或股票名称，例如 000001、平安银行。",
 ).strip()
 
-if not re.fullmatch(r"\d{6}", stock_code):
-    st.warning("请输入有效的6位股票代码。")
+if not stock_query:
+    st.info("请输入股票名称或代码开始搜索。")
     st.stop()
+
+with st.spinner("正在搜索股票..."):
+    stock_candidates = search_candidates(stock_query)
+if not stock_candidates:
+    st.warning("没有找到匹配股票，请检查名称或代码。")
+    st.stop()
+
+if len(stock_candidates) > 1:
+    selected_stock = st.selectbox(
+        "匹配到多只股票，请选择",
+        stock_candidates,
+        format_func=lambda item: f"{item['code']} - {item['name']}",
+    )
+else:
+    selected_stock = stock_candidates[0]
+    st.caption(f"已匹配：{selected_stock['code']} - {selected_stock['name']}")
+
+stock_code = selected_stock["code"]
 
 with st.sidebar:
     st.header("图表参数")
