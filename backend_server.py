@@ -46,6 +46,7 @@ class AnalysisHandler(BaseHTTPRequestHandler):
                 bool(data.get("enable_risk", True)),
                 bool(data.get("save_history", True)),
                 data.get("strategy_name", "中线趋势"),
+                data.get("strategy_overrides") or {},
             )
             self._send(200, {"report": report})
         except (ValueError, TypeError, json.JSONDecodeError) as exc:

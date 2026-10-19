@@ -142,6 +142,8 @@ for model_name in STRATEGY_NAMES:
             macd_fast=model["macd_fast"],
             macd_slow=model["macd_slow"],
             macd_signal_period=model["macd_signal_period"],
+            strategy_name=model_name,
+            strategy_config=model,
         )
     except ValueError as error:
         recommendation_errors[model_name] = str(error)

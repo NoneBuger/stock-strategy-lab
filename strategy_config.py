@@ -110,9 +110,11 @@ def get_strategy_config(name: str) -> dict[str, Any]:
     return deepcopy(STRATEGY_MODELS[name])
 
 
-def format_strategy_prompt(name: str) -> str:
+def format_strategy_prompt(name: str, overrides: dict[str, Any] | None = None) -> str:
     """Format one strategy's rules for the AI analyst prompt."""
     config = get_strategy_config(name)
+    if overrides:
+        config.update(overrides)
     logic = "\n".join(f"- {item}" for item in config["logic"])
     risk = "\n".join(f"- {item}" for item in config["risk"])
     return f"""策略模型：{name}

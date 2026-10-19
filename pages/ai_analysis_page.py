@@ -45,9 +45,12 @@ def load_local_analysis_data(symbol: str) -> pd.DataFrame:
     return fetch_stock_data(symbol)
 
 
-def calculate_local_strategy_check(data: pd.DataFrame, strategy_name: str) -> dict:
+def calculate_local_strategy_check(data: pd.DataFrame, strategy_name: str,
+                                   overrides: dict | None = None) -> dict:
     """Calculate a transparent local buy-condition check before AI analysis."""
     config = get_strategy_config(strategy_name)
+    if overrides:
+        config.update(overrides)
     close = pd.to_numeric(data["收盘"], errors="coerce")
     volume = pd.to_numeric(data["成交量"], errors="coerce")
     use_ema = strategy_name in {"短线动量", "超跌反弹"}
@@ -96,12 +99,13 @@ def calculate_local_strategy_check(data: pd.DataFrame, strategy_name: str) -> di
 
 def run_analysis_request(stock_code: str, depth: str, enable_debate: bool,
                          enable_risk: bool, save_history: bool,
-                         strategy_name: str) -> str:
+                         strategy_name: str, strategy_overrides: dict | None = None) -> str:
     """Call the configured remote backend, or use the local Codex runner."""
     backend_url = os.getenv("AI_BACKEND_URL", "").rstrip("/")
     if not backend_url:
         return run_codex_analysis(
-            stock_code, depth, enable_debate, enable_risk, save_history, strategy_name
+            stock_code, depth, enable_debate, enable_risk, save_history,
+            strategy_name, strategy_overrides
         )
     payload = json.dumps({
         "stock_code": stock_code,
@@ -110,6 +114,7 @@ def run_analysis_request(stock_code: str, depth: str, enable_debate: bool,
         "enable_risk": enable_risk,
         "save_history": save_history,
         "strategy_name": strategy_name,
+        "strategy_overrides": strategy_overrides or {},
     }).encode("utf-8")
     request = urllib.request.Request(f"{backend_url}/analyze", data=payload,
                                      headers={"Content-Type": "application/json"})
@@ -128,6 +133,46 @@ def run_analysis_request(stock_code: str, depth: str, enable_debate: bool,
 
 st.title("🤖 AI智能分析助手")
 st.caption("基于多智能体辩论的深度股票分析")
+with st.sidebar:
+    st.header("🎯 策略引擎设置")
+    selected_strategy = st.selectbox("选择策略模型", STRATEGY_NAMES, key="ai_strategy_model")
+    strategy_defaults = get_strategy_config(selected_strategy)
+    st.markdown(
+        f"**适用周期：** {strategy_defaults['suitable_period']}\n\n"
+        f"{strategy_defaults['description']}"
+    )
+    with st.expander("⚙️ 当前模型参数", expanded=True):
+        short_label = "EMA快线" if selected_strategy in {"短线动量", "超跌反弹"} else "SMA快线"
+        long_label = "EMA慢线" if selected_strategy in {"短线动量", "超跌反弹"} else "SMA慢线"
+        strategy_overrides = {
+            "short_window": st.slider(
+                short_label, 2, 120, strategy_defaults["short_window"],
+                key=f"ai_short_{selected_strategy}"
+            ),
+            "long_window": st.slider(
+                long_label, 5, 250, strategy_defaults["long_window"],
+                key=f"ai_long_{selected_strategy}"
+            ),
+            "rsi_period": st.slider(
+                "RSI周期", 2, 50, strategy_defaults["rsi_period"],
+                key=f"ai_rsi_{selected_strategy}"
+            ),
+            "macd_fast": st.slider(
+                "MACD快速EMA", 2, 50, strategy_defaults["macd_fast"],
+                key=f"ai_macd_fast_{selected_strategy}"
+            ),
+            "macd_slow": st.slider(
+                "MACD慢速EMA", 5, 100, strategy_defaults["macd_slow"],
+                key=f"ai_macd_slow_{selected_strategy}"
+            ),
+            "macd_signal_period": st.slider(
+                "MACD信号线EMA", 2, 30, strategy_defaults["macd_signal_period"],
+                key=f"ai_macd_signal_{selected_strategy}"
+            ),
+        }
+    if strategy_overrides["short_window"] >= strategy_overrides["long_window"]:
+        st.error("短期均线必须小于长期均线。")
+        st.stop()
 col1, col2 = st.columns([2, 1])
 
 with col1:
@@ -150,7 +195,6 @@ with col1:
         selected_stock = None
     stock_code = selected_stock["code"] if selected_stock else ""
     analysis_depth = st.select_slider("分析深度", options=["快速", "标准", "深度"], value="标准")
-    selected_strategy = st.selectbox("策略模型", STRATEGY_NAMES, key="ai_strategy_model")
     with st.expander("高级选项"):
         enable_debate = st.checkbox("启用牛熊辩论", value=True)
         enable_risk = st.checkbox("启用风险评估", value=True)
@@ -169,7 +213,7 @@ with col2:
             st.session_state.report = None
             st.session_state.analysis_future = get_executor().submit(
                 run_analysis_request, stock_code, analysis_depth, enable_debate, enable_risk, save_history,
-                selected_strategy,
+                selected_strategy, strategy_overrides,
             )
             st.rerun()
 
@@ -177,7 +221,7 @@ if selected_stock is not None:
     try:
         with st.spinner("正在计算本地策略条件..."):
             local_check = calculate_local_strategy_check(
-                load_local_analysis_data(selected_stock["code"]), selected_strategy
+                load_local_analysis_data(selected_stock["code"]), selected_strategy, strategy_overrides
             )
         st.divider()
         st.subheader("📍 本地规则检查")
