@@ -7,7 +7,10 @@ import os
 import re
 import shutil
 import subprocess
+from datetime import date, timedelta
 from pathlib import Path
+
+import pandas as pd
 
 from strategy_config import format_strategy_prompt
 
@@ -16,6 +19,42 @@ DEPTHS = {"快速": "quick", "标准": "standard", "深度": "deep"}
 
 def _error(message: str) -> str:
     return f"## AI分析未完成\n\n{message}\n\n> 未生成模拟结论。请检查运行环境和日志后重试。"
+
+
+def fetch_recent_data_markdown(stock_code: str, rows: int = 50) -> str:
+    """Fetch recent AkShare daily bars and serialize them as a Markdown table."""
+    try:
+        import akshare as ak
+
+        end_date = date.today()
+        data = ak.stock_zh_a_hist(
+            symbol=stock_code,
+            period="daily",
+            start_date=(end_date - timedelta(days=180)).strftime("%Y%m%d"),
+            end_date=end_date.strftime("%Y%m%d"),
+            adjust="",
+        )
+    except Exception as exc:
+        raise RuntimeError(f"AkShare 获取近50日日线失败：{exc}") from exc
+    if data.empty:
+        raise RuntimeError(f"AkShare 未返回股票 {stock_code} 的日线数据")
+
+    columns = [
+        column for column in ["日期", "开盘", "最高", "最低", "收盘", "成交量", "涨跌幅"]
+        if column in data.columns
+    ]
+    data = data[columns].tail(rows).copy()
+    data["日期"] = data["日期"].astype(str)
+    for column in columns:
+        if column != "日期":
+            data[column] = pd.to_numeric(data[column], errors="coerce").round(4)
+    header = "| " + " | ".join(columns) + " |"
+    divider = "| " + " | ".join("---" for _ in columns) + " |"
+    body = [
+        "| " + " | ".join("" if pd.isna(value) else str(value) for value in row) + " |"
+        for row in data.itertuples(index=False, name=None)
+    ]
+    return "\n".join([header, divider, *body])
 
 
 def run_codex_analysis(stock_code: str, depth: str = "标准", enable_debate: bool = True,
@@ -29,6 +68,10 @@ def run_codex_analysis(stock_code: str, depth: str = "标准", enable_debate: bo
     skill_path = project_root / ".agents" / "skills" / "run-tradingagents-native" / "SKILL.md"
     if not skill_path.is_file():
         return _error(f"未找到技能文件：`{skill_path}`。请先安装 run-tradingagents-native。")
+    try:
+        recent_data_markdown = fetch_recent_data_markdown(stock_code)
+    except RuntimeError as exc:
+        return _error(str(exc))
     codex = shutil.which("codex")
     if not codex:
         return _error("当前运行环境没有找到 `codex` 命令。Streamlit Cloud 通常不提供 Codex CLI 及其登录凭据，因此无法直接执行该技能。请将本页面连接到已认证的后端，或在带有 Codex CLI 的运行环境中部署。")
@@ -41,6 +84,13 @@ def run_codex_analysis(stock_code: str, depth: str = "标准", enable_debate: bo
 请严格参考以下策略模型，但不要把规则信号当作确定性预测：
 {strategy_prompt}
 报告必须标注数据来源、数据时间、关键不确定性，并明确说明不构成投资建议。"""
+    prompt += f"""
+
+以下是 AkShare 获取的 {stock_code} 最近50个交易日日线数据。你必须逐项对照策略规则，明确写出每条规则“满足/不满足/数据不足”，并给出明确结论：买入候选、持有观察、观望或卖出/规避。禁止只写“再等等”“视情况而定”等无条件、无依据的含糊结论。
+
+### AkShare 最近50日日线数据
+{recent_data_markdown}
+"""
     try:
         result = subprocess.run([codex, "exec", "-C", str(project_root),
                                  f"先完整读取并遵循技能文件 {skill_path}，然后执行以下请求：\n{prompt}"],

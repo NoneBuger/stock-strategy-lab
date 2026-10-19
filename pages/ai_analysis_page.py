@@ -9,14 +9,17 @@ import urllib.request
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
+import pandas as pd
 import streamlit as st
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 from run_analysis import run_codex_analysis
+from data_fetcher import fetch_stock_data
+from indicators import calculate_rsi
 from stock_search import search_stock_candidates
-from strategy_config import STRATEGY_NAMES
+from strategy_config import STRATEGY_NAMES, get_strategy_config
 
 st.set_page_config(layout="wide", page_title="AI智能分析", page_icon="🤖")
 st.markdown("""
@@ -35,6 +38,60 @@ def get_executor() -> ThreadPoolExecutor:
 @st.cache_data(ttl=3600, show_spinner=False)
 def search_candidates(query: str) -> list[dict[str, str]]:
     return search_stock_candidates(query)
+
+
+@st.cache_data(ttl=3600, show_spinner=False)
+def load_local_analysis_data(symbol: str) -> pd.DataFrame:
+    return fetch_stock_data(symbol)
+
+
+def calculate_local_strategy_check(data: pd.DataFrame, strategy_name: str) -> dict:
+    """Calculate a transparent local buy-condition check before AI analysis."""
+    config = get_strategy_config(strategy_name)
+    close = pd.to_numeric(data["收盘"], errors="coerce")
+    volume = pd.to_numeric(data["成交量"], errors="coerce")
+    use_ema = strategy_name in {"短线动量", "超跌反弹"}
+    if use_ema:
+        short = close.ewm(span=config["short_window"], adjust=False).mean()
+        long = close.ewm(span=config["long_window"], adjust=False).mean()
+    else:
+        short = close.rolling(config["short_window"]).mean()
+        long = close.rolling(config["long_window"]).mean()
+    macd = close.ewm(span=config["macd_fast"], adjust=False).mean() - close.ewm(
+        span=config["macd_slow"], adjust=False
+    ).mean()
+    signal = macd.ewm(span=config["macd_signal_period"], adjust=False).mean()
+    rsi = calculate_rsi(data, period=config["rsi_period"])
+    volume_ratio = volume / volume.rolling(20, min_periods=5).mean()
+    frame = pd.DataFrame({"close": close, "short": short, "long": long,
+                          "macd": macd, "signal": signal, "rsi": rsi,
+                          "volume_ratio": volume_ratio}).dropna()
+    if len(frame) < 2:
+        raise ValueError("有效数据不足，无法完成本地策略检查")
+    latest, previous = frame.iloc[-1], frame.iloc[-2]
+    if strategy_name == "超跌反弹":
+        rsi_ok = frame["rsi"].tail(5).min() < 30 and latest["rsi"] > previous["rsi"]
+    elif strategy_name == "短线动量":
+        rsi_ok = 50 <= latest["rsi"] <= 75
+    else:
+        rsi_ok = 50 <= latest["rsi"] <= 70
+    checks = {
+        "趋势/均线": latest["short"] > latest["long"],
+        "MACD动能": latest["macd"] > latest["signal"] and latest["macd"] >= previous["macd"],
+        f"RSI{config['rsi_period']}区间": rsi_ok,
+        "价格未明显追高": latest["close"] / latest["short"] - 1 <= 0.05,
+        "成交量条件": latest["volume_ratio"] >= config["volume_ratio"],
+    }
+    return {
+        "checks": checks,
+        "all_passed": all(checks.values()),
+        "price": float(latest["close"]),
+        "short": float(latest["short"]),
+        "long": float(latest["long"]),
+        "rsi": float(latest["rsi"]),
+        "macd_hist": float(latest["macd"] - latest["signal"]),
+        "date": pd.to_datetime(data.iloc[-1]["日期"]).strftime("%Y-%m-%d"),
+    }
 
 
 def run_analysis_request(stock_code: str, depth: str, enable_debate: bool,
@@ -91,6 +148,7 @@ with col1:
         st.caption(f"已匹配：{selected_stock['code']} - {selected_stock['name']}")
     else:
         selected_stock = None
+    stock_code = selected_stock["code"] if selected_stock else ""
     analysis_depth = st.select_slider("分析深度", options=["快速", "标准", "深度"], value="标准")
     selected_strategy = st.selectbox("策略模型", STRATEGY_NAMES, key="ai_strategy_model")
     with st.expander("高级选项"):
@@ -114,6 +172,27 @@ with col2:
                 selected_strategy,
             )
             st.rerun()
+
+if selected_stock is not None:
+    try:
+        with st.spinner("正在计算本地策略条件..."):
+            local_check = calculate_local_strategy_check(
+                load_local_analysis_data(selected_stock["code"]), selected_strategy
+            )
+        st.divider()
+        st.subheader("📍 本地规则检查")
+        st.caption(f"数据日期：{local_check['date']}；该判断由 Pandas 本地计算，不依赖 AI。")
+        if local_check["all_passed"]:
+            st.success(f"{selected_strategy}：当前技术条件全部满足，属于买入候选。")
+        else:
+            failed = [name for name, passed in local_check["checks"].items() if not passed]
+            st.error(f"{selected_strategy}：当前技术条件未全部满足，暂不判定为买入候选。未满足：{'、'.join(failed)}")
+        st.markdown("\n".join(
+            f"- {'✅' if passed else '❌'} **{name}**"
+            for name, passed in local_check["checks"].items()
+        ))
+    except Exception as error:
+        st.error(f"本地策略检查失败：{error}")
 
 future = st.session_state.get("analysis_future")
 if future is not None:
