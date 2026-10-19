@@ -5,6 +5,7 @@ import streamlit as st
 from lightweight_charts_v5 import lightweight_charts_v5_component
 
 from data_fetcher import fetch_stock_data
+from fundamentals import fetch_fundamental_snapshot
 from indicators import calculate_rsi, calculate_sma
 from recommendation import build_recommendation
 from stock_search import search_stock_candidates
@@ -32,6 +33,15 @@ st.title("股票行情分析")
 st.sidebar.page_link("pages/ai_analysis_page.py", label="AI智能分析", icon="🤖")
 st.page_link("pages/ai_analysis_page.py", label="打开 AI 智能分析", icon="🤖")
 
+watchlist = st.session_state.setdefault("watchlist", {"000001": "平安银行"})
+with st.sidebar:
+    st.subheader("⭐ 我的自选股")
+    watchlist_labels = {"__search__": "手动搜索股票"}
+    watchlist_labels.update({code: f"{code} - {name}" for code, name in watchlist.items()})
+    watchlist_choice = st.selectbox(
+        "快速查看", list(watchlist_labels), format_func=watchlist_labels.get, key="watchlist_choice"
+    )
+
 
 with st.sidebar:
     st.header("图表参数")
@@ -58,11 +68,15 @@ with st.sidebar:
 def search_candidates(query: str) -> list[dict[str, str]]:
     return search_stock_candidates(query)
 
-stock_query = st.text_input(
-    "股票名称或代码",
-    value="000001",
-    help="支持输入六位代码或股票名称，例如 000001、平安银行。",
-).strip()
+if watchlist_choice != "__search__":
+    stock_query = watchlist_choice
+    st.markdown(f"**当前自选：** {watchlist_labels[watchlist_choice]}")
+else:
+    stock_query = st.text_input(
+        "股票名称或代码",
+        value="000001",
+        help="支持输入六位代码或股票名称，例如 000001、平安银行。",
+    ).strip()
 
 if not stock_query:
     st.markdown("> 请输入股票名称或代码开始搜索。")
@@ -86,10 +100,25 @@ else:
 
 stock_code = selected_stock["code"]
 
+with st.sidebar:
+    if st.button("＋加入自选股", use_container_width=True, key=f"add_watchlist_{stock_code}"):
+        watchlist[stock_code] = selected_stock["name"]
+        st.session_state.watchlist = watchlist
+        st.rerun()
+    if stock_code in watchlist and st.button("移出当前自选", use_container_width=True, key=f"remove_watchlist_{stock_code}"):
+        watchlist.pop(stock_code, None)
+        st.session_state.watchlist = watchlist
+        st.rerun()
+
 
 @st.cache_data(ttl=3600, show_spinner=False)
 def load_stock_data(symbol: str) -> pd.DataFrame:
     return fetch_stock_data(symbol)
+
+
+@st.cache_data(ttl=3600, show_spinner=False)
+def load_fundamentals(symbol: str) -> dict:
+    return fetch_fundamental_snapshot(symbol)
 
 
 try:
@@ -98,6 +127,12 @@ try:
 except Exception as error:
     st.markdown(f"> **获取股票数据失败：** `{error}`")
     st.stop()
+
+try:
+    fundamentals = load_fundamentals(stock_code)
+except Exception as error:
+    fundamentals = None
+    st.markdown(f"> **F10 基本面暂不可用：** `{error}`。技术建议不会据此假设公司盈利或估值安全。")
 
 
 def _series_records(frame: pd.DataFrame, value_column: str) -> list[dict]:
@@ -144,6 +179,7 @@ for model_name in STRATEGY_NAMES:
             macd_signal_period=model["macd_signal_period"],
             strategy_name=model_name,
             strategy_config=model,
+            fundamental_metrics=fundamentals,
         )
     except ValueError as error:
         recommendation_errors[model_name] = str(error)
@@ -295,12 +331,45 @@ lightweight_charts_v5_component(
 
 st.dataframe(data.tail(20), use_container_width=True)
 
+with st.expander("📋 F10 基本面快照与排雷", expanded=True):
+    if fundamentals:
+        def _show(value: object) -> str:
+            return "暂无数据" if value in (None, "") else str(value)
+
+        st.markdown(
+            f"- **股票名称：** {_show(fundamentals.get('name'))}\n"
+            f"- **行业：** {_show(fundamentals.get('industry'))}\n"
+            f"- **市场/板块：** {_show(fundamentals.get('market'))}\n"
+            f"- **动态市盈率：** {_show(fundamentals.get('pe_ttm'))}\n"
+            f"- **市净率：** {_show(fundamentals.get('pb'))}\n"
+            f"- **总市值：** {_show(fundamentals.get('market_cap'))}\n"
+            f"- **ROE：** {_show(fundamentals.get('roe'))}\n"
+            f"- **归母净利润：** {_show(fundamentals.get('net_profit'))}\n"
+            f"- **数据来源：** {_show(fundamentals.get('source'))}"
+        )
+        if fundamentals.get("warnings"):
+            st.error("；".join(fundamentals["warnings"]))
+        else:
+            st.success("当前可用 F10 字段未触发基础排雷规则；仍需结合财报和公告核实。")
+    else:
+        st.markdown("> 当前没有足够的 F10 数据，基本面模型不会假设其盈利或估值安全。")
+
 st.divider()
 st.subheader("📌 六模型投资建议参考")
 st.markdown(
     f"数据日期：{max(item['date'] for item in recommendations.values()) if recommendations else '未知'}；"
     f"数据源：{data.attrs.get('data_source', '未知')}。以下结果由本地规则计算，不依赖 AI。"
 )
+with st.expander("🧭 如何选择适合自己的策略", expanded=False):
+    st.markdown(
+        "- **短线动量：** 能承受较大波动、持仓1～10个交易日，重点看量价和快速均线。\n"
+        "- **超跌反弹：** 只适合轻仓试错，不适合把反弹当成长期趋势。\n"
+        "- **中线趋势：** 适合持仓数周至数月，接受信号滞后换取较少交易。\n"
+        "- **中线突破：** 适合能承受假突破，必须等待成交量和收盘确认。\n"
+        "- **基本面趋势：** 适合低换手投资者，但必须先确认 ROE、利润和估值数据完整。\n"
+        "- **防守型：** 更重视回撤和现金比例，适合风险承受能力较低的投资者。\n\n"
+        "选择原则：先按持有周期和最大可接受亏损选择，再看模型信号；不要因为某个模型给出买入候选就忽略其他模型和 F10 排雷结果。"
+    )
 model_tabs = st.tabs(list(STRATEGY_NAMES))
 for model_tab, model_name in zip(model_tabs, STRATEGY_NAMES):
     with model_tab:
