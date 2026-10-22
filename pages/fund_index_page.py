@@ -10,6 +10,7 @@ from asset_fetcher import (
     search_index_candidates,
 )
 from fund_recommendation import build_fund_index_recommendation
+from navigation import render_navigation
 
 
 st.set_page_config(page_title="基金与指数分析", page_icon="📊", layout="wide")
@@ -21,6 +22,7 @@ st.markdown("""
 }
 </style>
 """, unsafe_allow_html=True)
+render_navigation("基金与指数")
 
 st.title("基金与指数分析")
 st.caption("基于公开行情数据的趋势、风险和分批建仓参考；不构成投资建议。")
@@ -92,4 +94,4 @@ with metric_tabs[1]:
 
 with metric_tabs[2]:
     st.markdown(f"**数据源：** `{data.attrs.get('data_source', '未知')}`")
-    st.dataframe(data.tail(60), use_container_width=True)
+    st.dataframe(data.sort_values("日期", ascending=False).head(60), use_container_width=True)

@@ -44,7 +44,7 @@ def fetch_recent_data_markdown(stock_code: str, rows: int = 50) -> str:
         column for column in ["日期", "开盘", "最高", "最低", "收盘", "成交量", "涨跌幅"]
         if column in data.columns
     ]
-    data = data[columns].tail(rows).copy()
+    data = data[columns].tail(rows).sort_values("日期", ascending=False).copy()
     data["日期"] = data["日期"].astype(str)
     for column in columns:
         if column != "日期":

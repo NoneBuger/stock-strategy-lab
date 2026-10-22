@@ -7,6 +7,7 @@ from lightweight_charts_v5 import lightweight_charts_v5_component
 from data_fetcher import fetch_stock_data
 from fundamentals import fetch_fundamental_snapshot
 from indicators import calculate_rsi, calculate_sma
+from navigation import render_navigation
 from recommendation import build_recommendation
 from stock_search import search_stock_candidates
 from strategy_config import STRATEGY_NAMES, get_strategy_config
@@ -30,9 +31,7 @@ st.markdown(
     unsafe_allow_html=True,
 )
 st.title("股票行情分析")
-st.sidebar.page_link("pages/ai_analysis_page.py", label="AI智能分析", icon="🤖")
-st.sidebar.page_link("pages/fund_index_page.py", label="基金与指数分析", icon="📊")
-st.page_link("pages/ai_analysis_page.py", label="打开 AI 智能分析", icon="🤖")
+render_navigation("股票行情")
 
 watchlist = st.session_state.setdefault("watchlist", {"000001": "平安银行"})
 with st.sidebar:
@@ -337,7 +336,7 @@ lightweight_charts_v5_component(
     key=f"chart-{stock_code}-{short_window}-{long_window}-{macd_fast}-{macd_slow}-{rsi_period}",
 )
 
-st.dataframe(data.tail(20), use_container_width=True)
+st.dataframe(data.sort_values("日期", ascending=False).head(20), use_container_width=True)
 
 with st.expander("📋 F10 基本面快照与排雷", expanded=True):
     if fundamentals:

@@ -18,6 +18,7 @@ if str(PROJECT_ROOT) not in sys.path:
 from run_analysis import run_codex_analysis
 from data_fetcher import fetch_stock_data
 from indicators import calculate_rsi
+from navigation import render_navigation
 from stock_search import search_stock_candidates
 from strategy_config import STRATEGY_NAMES, get_strategy_config
 
@@ -28,6 +29,7 @@ st.markdown("""
 .st-emotion-cache-1y4p8pa { padding: 2rem 1rem; }
 </style>
 """, unsafe_allow_html=True)
+render_navigation("AI智能分析")
 
 
 @st.cache_resource
