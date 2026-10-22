@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from datetime import date
+import inspect
 from dateutil.relativedelta import relativedelta
 
 import pandas as pd
@@ -67,6 +68,9 @@ def _rename_history(frame: pd.DataFrame) -> pd.DataFrame:
         "单位净值": "收盘", "累计净值": "收盘", "成交量": "成交量", "成交额": "成交量",
     }
     renamed = frame.rename(columns={column: aliases.get(str(column), str(column)) for column in frame.columns})
+    # Open-fund responses often contain both unit and accumulated NAV. Both
+    # map to 收盘, so keep the first (unit NAV) column only.
+    renamed = renamed.loc[:, ~renamed.columns.duplicated()]
     if "日期" not in renamed or "收盘" not in renamed:
         raise ValueError("数据源缺少日期或净值字段")
     for column in ("开盘", "最高", "最低", "成交量"):
@@ -95,7 +99,19 @@ def _fetch_fund_etf(symbol: str, start: date, end: date) -> pd.DataFrame:
 def _fetch_open_fund(symbol: str) -> pd.DataFrame:
     import akshare as ak
 
-    frame = ak.fund_open_fund_info_em(fund=symbol, indicator="单位净值走势")
+    endpoint = ak.fund_open_fund_info_em
+    parameters = inspect.signature(endpoint).parameters
+    kwargs = {"indicator": "单位净值走势"}
+    # AkShare changed this argument from symbol to fund in some releases.
+    # Select the supported spelling at runtime for Streamlit Cloud versions.
+    if "symbol" in parameters:
+        kwargs["symbol"] = symbol
+    elif "fund" in parameters:
+        kwargs["fund"] = symbol
+    else:
+        frame = endpoint(symbol, "单位净值走势")
+        return _rename_history(frame)
+    frame = endpoint(**kwargs)
     return _rename_history(frame)
 
 
