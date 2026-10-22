@@ -10,10 +10,13 @@ from asset_fetcher import (
     search_index_candidates,
 )
 from fund_recommendation import build_fund_index_recommendation
-from navigation import render_navigation
+from navigation import render_navigation, render_top_navigation
 
 
 st.set_page_config(page_title="基金与指数分析", page_icon="📊", layout="wide")
+requested_asset_type = st.session_state.pop("_asset_page_type", None)
+current_page = "指数" if requested_asset_type == "指数" else "基金"
+render_top_navigation()
 st.markdown("""
 <style>
 @media (max-width: 768px) {
@@ -22,12 +25,15 @@ st.markdown("""
 }
 </style>
 """, unsafe_allow_html=True)
-render_navigation("基金与指数")
+render_navigation(current_page)
 
 st.title("基金与指数分析")
 st.caption("基于公开行情数据的趋势、风险和分批建仓参考；不构成投资建议。")
 
-asset_type = st.sidebar.selectbox("资产类型", ["基金", "指数"])
+asset_type = st.sidebar.selectbox(
+    "资产类型", ["基金", "指数"],
+    index=1 if requested_asset_type == "指数" else 0,
+)
 years = st.sidebar.slider("历史数据年数", 1, 10, 3)
 query = st.text_input("搜索基金名称/代码或指数名称/代码", "沪深300" if asset_type == "指数" else "510300")
 

@@ -2,11 +2,12 @@
 
 import streamlit as st
 
-from navigation import render_navigation
+from navigation import render_navigation, render_top_navigation
 from strategy_config import STRATEGY_NAMES, get_strategy_config
 
 
 st.set_page_config(page_title="策略模型配置", page_icon="⚙️", layout="wide")
+render_top_navigation()
 st.markdown("""
 <style>
 @media (max-width: 768px) {

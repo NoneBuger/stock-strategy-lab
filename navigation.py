@@ -5,10 +5,22 @@ import streamlit as st
 
 PAGES = {
     "股票行情": "app.py",
-    "基金与指数": "pages/fund_index_page.py",
+    "基金": "pages/fund_page.py",
+    "指数": "pages/index_page.py",
     "AI智能分析": "pages/ai_analysis_page.py",
     "策略模型配置": "pages/strategy_config_page.py",
 }
+
+PAGE_ICONS = {"股票行情": "📈", "基金": "💰", "指数": "📊", "AI智能分析": "🤖", "策略模型配置": "⚙️"}
+
+
+def render_top_navigation() -> None:
+    """Render large, always-visible navigation links above page content."""
+    st.markdown("### 快速导航")
+    columns = st.columns(len(PAGES), gap="small")
+    for column, (label, path) in zip(columns, PAGES.items()):
+        with column:
+            st.page_link(path, label=label, icon=PAGE_ICONS[label])
 
 
 def render_navigation(current_page: str) -> None:

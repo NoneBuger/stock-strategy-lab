@@ -18,11 +18,12 @@ if str(PROJECT_ROOT) not in sys.path:
 from run_analysis import run_codex_analysis
 from data_fetcher import fetch_stock_data
 from indicators import calculate_rsi
-from navigation import render_navigation
+from navigation import render_navigation, render_top_navigation
 from stock_search import search_stock_candidates
 from strategy_config import STRATEGY_NAMES, get_strategy_config
 
 st.set_page_config(layout="wide", page_title="AI智能分析", page_icon="🤖")
+render_top_navigation()
 st.markdown("""
 <style>
 .main { background-color: #0e1117; }
