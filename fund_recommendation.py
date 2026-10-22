@@ -1,8 +1,13 @@
-"""Technical screening and position references for funds and indexes."""
+"""Practical, transparent screening models for Chinese funds and indexes."""
 
 from __future__ import annotations
 
+import math
+
 import pandas as pd
+
+
+FUND_STRATEGIES = ["长期稳健型", "ETF趋势型", "指数定投型"]
 
 
 def _rsi(close: pd.Series, period: int = 14) -> pd.Series:
@@ -12,40 +17,109 @@ def _rsi(close: pd.Series, period: int = 14) -> pd.Series:
     return 100 - 100 / (1 + gain / loss.replace(0, float("nan")))
 
 
-def build_fund_index_recommendation(data: pd.DataFrame, asset_type: str) -> dict:
-    if len(data) < 65:
-        raise ValueError("至少需要65个交易日才能计算中短期趋势")
-    close = pd.to_numeric(data["收盘"], errors="coerce")
+def _metrics(close: pd.Series) -> dict[str, float]:
+    returns = close.pct_change().dropna()
+    if returns.empty:
+        raise ValueError("有效收益率数据不足")
+    days = max(len(close), 1)
+    annualized_return = (float(close.iloc[-1]) / float(close.iloc[0])) ** (252 / days) - 1
+    recent_returns = returns.tail(252)
+    volatility = float(recent_returns.std() * math.sqrt(252))
+    risk_free_daily = (1.02 ** (1 / 252)) - 1
+    sharpe = float((recent_returns - risk_free_daily).mean() / recent_returns.std() * math.sqrt(252)) if recent_returns.std() else 0.0
+    drawdown_curve = close / close.cummax() - 1
+    max_drawdown = float(drawdown_curve.min())
+    calmar = annualized_return / abs(max_drawdown) if max_drawdown < 0 else 0.0
+    return {"annualized_return": annualized_return, "volatility": volatility,
+            "sharpe": sharpe, "max_drawdown": max_drawdown, "calmar": calmar}
+
+
+def build_fund_index_recommendation(
+    data: pd.DataFrame,
+    asset_type: str,
+    strategy_name: str = "长期稳健型",
+) -> dict:
+    """Return a rule-based recommendation with risk-adjusted metrics.
+
+    PE/PB valuation is deliberately not inferred from price history. A real
+    valuation percentile must come from a separate fundamental data endpoint.
+    """
+    if strategy_name not in FUND_STRATEGIES:
+        raise ValueError(f"不支持的基金策略：{strategy_name}")
+    close = pd.to_numeric(data["收盘"], errors="coerce").dropna().reset_index(drop=True)
+    if len(close) < 65:
+        raise ValueError("至少需要65个交易日才能计算基金风险和趋势指标")
+
     sma20, sma60 = close.rolling(20).mean(), close.rolling(60).mean()
+    sma120, sma250 = close.rolling(120).mean(), close.rolling(250).mean()
     rsi = _rsi(close).iloc[-1]
     current = float(close.iloc[-1])
     ma20, ma60 = float(sma20.iloc[-1]), float(sma60.iloc[-1])
-    returns = close.pct_change().dropna()
-    volatility = float(returns.tail(60).std() * (252 ** 0.5))
-    rolling_high = close.rolling(60).max().iloc[-1]
-    drawdown = current / float(rolling_high) - 1
-    trend_ok = current > ma20 > ma60
-    rsi_ok = 45 <= float(rsi) <= 70
-    if trend_ok and rsi_ok:
-        signal, action = "分批建仓候选", "趋势向上，可分2～3次建仓，避免一次性追高"
-    elif current >= ma60 and float(rsi) < 45:
-        signal, action = "回撤观察", "接近趋势线，等待止跌确认后再小仓位试探"
-    elif current < ma60:
-        signal, action = "暂不建仓", "价格低于60日均线，先规避趋势走弱风险"
+    ma120 = float(sma120.iloc[-1]) if pd.notna(sma120.iloc[-1]) else ma60
+    ma250 = float(sma250.iloc[-1]) if pd.notna(sma250.iloc[-1]) else ma120
+    metrics = _metrics(close)
+    momentum = {
+        "3m": current / float(close.iloc[-64]) - 1 if len(close) > 64 else 0.0,
+        "6m": current / float(close.iloc[-127]) - 1 if len(close) > 127 else 0.0,
+        "12m": current / float(close.iloc[-253]) - 1 if len(close) > 253 else metrics["annualized_return"],
+    }
+    atr = float(close.diff().abs().rolling(20).mean().iloc[-1])
+    atr_pct = atr / current if current else 0.0
+    drawdown_1y = current / float(close.tail(252).max()) - 1
+
+    if strategy_name == "长期稳健型":
+        trend_ok = current > ma120 and momentum["6m"] > 0 and momentum["12m"] > 0
+        risk_ok = metrics["sharpe"] >= 0.3 and metrics["max_drawdown"] > -0.30
+        if trend_ok and risk_ok:
+            signal, action, position = "分批建仓候选", "长期趋势和风险调整收益较好，可分三批建仓", "30%～50%"
+        elif current >= ma120 and momentum["6m"] > -0.05:
+            signal, action, position = "轻仓/定投观察", "趋势尚可但收益或风险指标不足，优先定投", "10%～20%"
+        else:
+            signal, action, position = "暂不建仓", "长期趋势或风险收益比不理想，等待修复", "0%～10%"
+        reasons = [f"收盘价{'高于' if current > ma120 else '低于'}MA120",
+                   f"近6个月收益={momentum['6m']:.1%}",
+                   f"近12个月收益={momentum['12m']:.1%}",
+                   f"夏普={metrics['sharpe']:.2f}", f"最大回撤={metrics['max_drawdown']:.1%}"]
+        entry_base = ma120
+    elif strategy_name == "ETF趋势型":
+        trend_ok = current > ma20 > ma60 and momentum["3m"] > 0 and momentum["6m"] > 0
+        rsi_ok = float(rsi) < 75
+        if trend_ok and rsi_ok:
+            signal, action, position = "趋势建仓候选", "ETF趋势向上，可按回踩分批买入，不追高", "30%～50%"
+        elif current >= ma60 and momentum["3m"] > -0.05:
+            signal, action, position = "回踩观察", "趋势未完全破坏，等待回到均线附近再确认", "10%～20%"
+        else:
+            signal, action, position = "暂不建仓", "短中期趋势未确认，规避弱势接飞刀", "0%～10%"
+        reasons = [f"收盘价{'高于' if current > ma20 else '低于'}MA20",
+                   f"MA20{'高于' if ma20 > ma60 else '低于'}MA60",
+                   f"近3个月收益={momentum['3m']:.1%}",
+                   f"近6个月收益={momentum['6m']:.1%}", f"RSI(14)={float(rsi):.1f}"]
+        entry_base = ma20
     else:
-        signal, action = "持有/观察", "趋势尚未形成共振，等待均线和强弱指标确认"
-    stop_pct, target_pct = (0.08, 0.15) if asset_type == "基金" else (0.07, 0.12)
-    entry = min(current, ma20 * 1.01) if signal == "分批建仓候选" else ma20
+        if drawdown_1y <= -0.20 and current >= ma60:
+            signal, action, position = "回撤定投候选", "距一年高点回撤较大但未跌破MA60，可分期定投", "20%～30%"
+        elif current >= ma60 and momentum["12m"] > 0:
+            signal, action, position = "正常定投", "趋势尚可，按固定周期投入，不一次性追涨", "10%～20%"
+        else:
+            signal, action, position = "暂停加仓", "趋势偏弱，等待重新站上MA60", "0%～10%"
+        reasons = ["PE/PB分位数未接入，未将价格指标冒充估值",
+                   f"距近一年高点={drawdown_1y:.1%}",
+                   f"收盘价{'高于' if current >= ma60 else '低于'}MA60",
+                   f"近12个月收益={momentum['12m']:.1%}"]
+        entry_base = ma60
+
+    entry = min(current, entry_base * 1.01)
+    second_entry = entry * (1 - min(max(atr_pct, 0.03), 0.08))
+    stop = max(entry - 2 * atr, entry * 0.88)
     return {
-        "signal": signal, "action": action, "price": current,
-        "sma20": ma20, "sma60": ma60, "rsi": float(rsi),
-        "volatility": volatility, "drawdown": drawdown,
-        "entry": entry, "stop": entry * (1 - stop_pct),
-        "target": entry * (1 + target_pct),
-        "reasons": [
-            f"收盘价{'高于' if current > ma20 else '低于'}SMA20",
-            f"SMA20{'高于' if ma20 > ma60 else '低于'}SMA60",
-            f"RSI(14)={float(rsi):.1f}",
-            f"近60日最大回撤={drawdown:.1%}",
-        ],
+        "strategy_name": strategy_name, "signal": signal, "action": action,
+        "position": position, "price": current, "sma20": ma20, "sma60": ma60,
+        "sma120": ma120, "sma250": ma250, "rsi": float(rsi),
+        "volatility": metrics["volatility"], "annualized_return": metrics["annualized_return"],
+        "sharpe": metrics["sharpe"], "calmar": metrics["calmar"],
+        "drawdown": metrics["max_drawdown"], "drawdown_1y": drawdown_1y,
+        "momentum_3m": momentum["3m"], "momentum_6m": momentum["6m"],
+        "momentum_12m": momentum["12m"], "atr": atr, "entry": entry,
+        "second_entry": second_entry, "stop": stop, "target": None,
+        "valuation_status": "未接入PE/PB分位数；本次不做估值结论", "reasons": reasons,
     }
