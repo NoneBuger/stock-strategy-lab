@@ -3,6 +3,7 @@
 import streamlit as st
 
 from navigation import render_navigation, render_top_navigation
+from fund_recommendation import FUND_STRATEGIES, FUND_STRATEGY_DEFAULTS
 from strategy_config import STRATEGY_NAMES, get_strategy_config
 
 
@@ -19,7 +20,40 @@ st.markdown("""
 render_navigation("策略模型配置")
 
 st.title("⚙️ 策略模型与参数配置")
-st.caption("这里调整的参数会同步到 AI 智能分析页面当前会话。")
+st.caption("股票参数同步到 AI 智能分析；基金/ETF参数同步到基金与指数页面当前会话。")
+
+configuration_type = st.radio("配置类型", ["股票模型", "基金/ETF模型"], horizontal=True)
+if configuration_type == "基金/ETF模型":
+    selected_fund_strategy = st.selectbox("选择基金/ETF模型", FUND_STRATEGIES)
+    defaults = FUND_STRATEGY_DEFAULTS[selected_fund_strategy]
+    saved = st.session_state.get(f"fund_strategy_overrides_{selected_fund_strategy}", {})
+    values = {**defaults, **saved}
+    st.markdown(
+        "基金模型使用风险调整收益和趋势指标，不把价格历史冒充PE/PB估值。"
+    )
+    with st.form(f"fund_strategy_config_form_{selected_fund_strategy}"):
+        if selected_fund_strategy == "长期稳健型":
+            trend_window = st.slider("长期趋势均线", 60, 250, int(values["trend_window"]))
+            sharpe_min = st.slider("最低夏普比率", -1.0, 2.0, float(values["sharpe_min"]), 0.1)
+            max_drawdown_limit = st.slider("最大回撤上限", 0.10, 0.60, float(values["max_drawdown_limit"]), 0.05)
+            fund_overrides = {"trend_window": trend_window, "sharpe_min": sharpe_min, "max_drawdown_limit": max_drawdown_limit}
+        elif selected_fund_strategy == "ETF趋势型":
+            fast_window = st.slider("ETF快均线", 5, 60, int(values["fast_window"]))
+            slow_window = st.slider("ETF慢均线", 20, 200, int(values["slow_window"]))
+            rsi_max = st.slider("RSI上限", 60, 90, int(values["rsi_max"]))
+            atr_stop_multiple = st.slider("ATR止损倍数", 1.0, 4.0, float(values["atr_stop_multiple"]), 0.5)
+            fund_overrides = {"fast_window": fast_window, "slow_window": slow_window, "rsi_max": rsi_max, "atr_stop_multiple": atr_stop_multiple}
+        else:
+            trend_window = st.slider("定投趋势均线", 20, 120, int(values["trend_window"]))
+            drawdown_trigger = st.slider("回撤加大定投阈值", 0.05, 0.50, float(values["drawdown_trigger"]), 0.05)
+            momentum_window = st.slider("动量观察月数", 3, 24, int(values["momentum_window"]))
+            fund_overrides = {"trend_window": trend_window, "drawdown_trigger": drawdown_trigger, "momentum_window": momentum_window}
+        fund_submitted = st.form_submit_button("保存基金/ETF模型参数", type="primary", use_container_width=True)
+    if fund_submitted:
+        st.session_state[f"fund_strategy_overrides_{selected_fund_strategy}"] = fund_overrides
+        st.success("基金/ETF模型参数已保存，返回基金或指数页面即可生效。")
+    st.markdown("- **估值说明：** 当前未接入PE/PB历史分位数，指数定投模型不会输出虚假的估值结论。")
+    st.stop()
 
 selected_strategy = st.selectbox("选择策略模型", STRATEGY_NAMES, key="config_strategy_model")
 config = get_strategy_config(selected_strategy)

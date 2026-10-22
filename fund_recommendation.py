@@ -8,6 +8,11 @@ import pandas as pd
 
 
 FUND_STRATEGIES = ["长期稳健型", "ETF趋势型", "指数定投型"]
+FUND_STRATEGY_DEFAULTS = {
+    "长期稳健型": {"trend_window": 120, "sharpe_min": 0.30, "max_drawdown_limit": 0.30},
+    "ETF趋势型": {"fast_window": 20, "slow_window": 60, "rsi_max": 75, "atr_stop_multiple": 2.0},
+    "指数定投型": {"trend_window": 60, "drawdown_trigger": 0.20, "momentum_window": 12},
+}
 
 
 def _rsi(close: pd.Series, period: int = 14) -> pd.Series:
@@ -38,6 +43,7 @@ def build_fund_index_recommendation(
     data: pd.DataFrame,
     asset_type: str,
     strategy_name: str = "长期稳健型",
+    overrides: dict | None = None,
 ) -> dict:
     """Return a rule-based recommendation with risk-adjusted metrics.
 
@@ -46,12 +52,18 @@ def build_fund_index_recommendation(
     """
     if strategy_name not in FUND_STRATEGIES:
         raise ValueError(f"不支持的基金策略：{strategy_name}")
+    config = FUND_STRATEGY_DEFAULTS[strategy_name].copy()
+    if overrides:
+        config.update(overrides)
     close = pd.to_numeric(data["收盘"], errors="coerce").dropna().reset_index(drop=True)
     if len(close) < 65:
         raise ValueError("至少需要65个交易日才能计算基金风险和趋势指标")
 
-    sma20, sma60 = close.rolling(20).mean(), close.rolling(60).mean()
-    sma120, sma250 = close.rolling(120).mean(), close.rolling(250).mean()
+    fast_window = int(config.get("fast_window", 20))
+    slow_window = int(config.get("slow_window", 60))
+    trend_window = int(config.get("trend_window", 120))
+    sma20, sma60 = close.rolling(fast_window).mean(), close.rolling(slow_window).mean()
+    sma120, sma250 = close.rolling(trend_window).mean(), close.rolling(250).mean()
     rsi = _rsi(close).iloc[-1]
     current = float(close.iloc[-1])
     ma20, ma60 = float(sma20.iloc[-1]), float(sma60.iloc[-1])
@@ -63,13 +75,18 @@ def build_fund_index_recommendation(
         "6m": current / float(close.iloc[-127]) - 1 if len(close) > 127 else 0.0,
         "12m": current / float(close.iloc[-253]) - 1 if len(close) > 253 else metrics["annualized_return"],
     }
+    custom_momentum_days = int(config.get("momentum_window", 12)) * 21
+    custom_momentum = (
+        current / float(close.iloc[-custom_momentum_days - 1]) - 1
+        if len(close) > custom_momentum_days else metrics["annualized_return"]
+    )
     atr = float(close.diff().abs().rolling(20).mean().iloc[-1])
     atr_pct = atr / current if current else 0.0
     drawdown_1y = current / float(close.tail(252).max()) - 1
 
     if strategy_name == "长期稳健型":
         trend_ok = current > ma120 and momentum["6m"] > 0 and momentum["12m"] > 0
-        risk_ok = metrics["sharpe"] >= 0.3 and metrics["max_drawdown"] > -0.30
+        risk_ok = metrics["sharpe"] >= float(config["sharpe_min"]) and metrics["max_drawdown"] > -float(config["max_drawdown_limit"])
         if trend_ok and risk_ok:
             signal, action, position = "分批建仓候选", "长期趋势和风险调整收益较好，可分三批建仓", "30%～50%"
         elif current >= ma120 and momentum["6m"] > -0.05:
@@ -83,7 +100,7 @@ def build_fund_index_recommendation(
         entry_base = ma120
     elif strategy_name == "ETF趋势型":
         trend_ok = current > ma20 > ma60 and momentum["3m"] > 0 and momentum["6m"] > 0
-        rsi_ok = float(rsi) < 75
+        rsi_ok = float(rsi) < float(config["rsi_max"])
         if trend_ok and rsi_ok:
             signal, action, position = "趋势建仓候选", "ETF趋势向上，可按回踩分批买入，不追高", "30%～50%"
         elif current >= ma60 and momentum["3m"] > -0.05:
@@ -96,21 +113,22 @@ def build_fund_index_recommendation(
                    f"近6个月收益={momentum['6m']:.1%}", f"RSI(14)={float(rsi):.1f}"]
         entry_base = ma20
     else:
-        if drawdown_1y <= -0.20 and current >= ma60:
-            signal, action, position = "回撤定投候选", "距一年高点回撤较大但未跌破MA60，可分期定投", "20%～30%"
-        elif current >= ma60 and momentum["12m"] > 0:
+        if drawdown_1y <= -float(config["drawdown_trigger"]) and current >= ma120:
+            signal, action, position = "回撤定投候选", f"距一年高点回撤较大但未跌破MA{trend_window}，可分期定投", "20%～30%"
+        elif current >= ma120 and custom_momentum > 0:
             signal, action, position = "正常定投", "趋势尚可，按固定周期投入，不一次性追涨", "10%～20%"
         else:
             signal, action, position = "暂停加仓", "趋势偏弱，等待重新站上MA60", "0%～10%"
         reasons = ["PE/PB分位数未接入，未将价格指标冒充估值",
                    f"距近一年高点={drawdown_1y:.1%}",
-                   f"收盘价{'高于' if current >= ma60 else '低于'}MA60",
-                   f"近12个月收益={momentum['12m']:.1%}"]
-        entry_base = ma60
+                   f"收盘价{'高于' if current >= ma120 else '低于'}MA{trend_window}",
+                   f"近{int(config.get('momentum_window', 12))}个月收益={custom_momentum:.1%}"]
+        entry_base = ma120
 
     entry = min(current, entry_base * 1.01)
     second_entry = entry * (1 - min(max(atr_pct, 0.03), 0.08))
-    stop = max(entry - 2 * atr, entry * 0.88)
+    stop_multiple = float(config.get("atr_stop_multiple", 2.0))
+    stop = max(entry - stop_multiple * atr, entry * 0.88)
     return {
         "strategy_name": strategy_name, "signal": signal, "action": action,
         "position": position, "price": current, "sma20": ma20, "sma60": ma60,
@@ -122,4 +140,5 @@ def build_fund_index_recommendation(
         "momentum_12m": momentum["12m"], "atr": atr, "entry": entry,
         "second_entry": second_entry, "stop": stop, "target": None,
         "valuation_status": "未接入PE/PB分位数；本次不做估值结论", "reasons": reasons,
+        "parameters": config,
     }

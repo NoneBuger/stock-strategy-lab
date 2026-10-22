@@ -35,6 +35,7 @@ asset_type = st.sidebar.selectbox(
     index=1 if requested_asset_type == "指数" else 0,
 )
 strategy_name = st.sidebar.selectbox("投资模型", FUND_STRATEGIES, key=f"fund_strategy_{asset_type}")
+strategy_overrides = st.session_state.get(f"fund_strategy_overrides_{strategy_name}", {})
 with st.sidebar.expander("模型说明"):
     st.markdown(
         "- **长期稳健型：** 6/12个月动量、MA120、夏普和最大回撤。\n"
@@ -66,7 +67,9 @@ selected = st.selectbox(
 try:
     with st.spinner(f"正在加载 {selected['name']} 历史数据..."):
         data = cached_asset_data(asset_type, selected["code"], years)
-    recommendation = build_fund_index_recommendation(data, asset_type, strategy_name)
+    recommendation = build_fund_index_recommendation(
+        data, asset_type, strategy_name, strategy_overrides
+    )
 except Exception as error:
     st.error(f"数据或指标计算失败：{error}")
     st.stop()
