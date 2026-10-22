@@ -11,6 +11,16 @@ import pandas as pd
 from strategy_config import get_strategy_config
 
 
+ATR_STOP_MULTIPLES = {
+    "短线动量": 1.5,
+    "超跌反弹": 1.2,
+    "中线趋势": 2.0,
+    "中线突破": 1.8,
+    "基本面趋势": 2.5,
+    "防守型": 2.0,
+}
+
+
 def build_recommendation(
     data: pd.DataFrame,
     short_window: int = 20,
@@ -22,6 +32,7 @@ def build_recommendation(
     strategy_name: str = "中线趋势",
     strategy_config: Mapping[str, Any] | None = None,
     fundamental_metrics: Mapping[str, Any] | None = None,
+    market_regime: Mapping[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Calculate a recommendation using the selected model's actual rules."""
     required = {"日期", "开盘", "最高", "最低", "收盘", "成交量"}
@@ -52,6 +63,14 @@ def build_recommendation(
     bollinger_lower = middle - 2 * std
     breakout_level = close.shift(1).rolling(20, min_periods=20).max()
     volatility = close.pct_change().rolling(20, min_periods=20).std() * np.sqrt(252)
+    previous_close = close.shift(1)
+    high = pd.to_numeric(frame["最高"], errors="coerce")
+    low = pd.to_numeric(frame["最低"], errors="coerce")
+    true_range = pd.concat(
+        [high - low, (high - previous_close).abs(), (low - previous_close).abs()],
+        axis=1,
+    ).max(axis=1)
+    atr = true_range.rolling(14, min_periods=14).mean()
 
     use_ema = strategy_name in {"短线动量", "超跌反弹"}
     trend_short = short_ema if use_ema else short_sma
@@ -62,6 +81,7 @@ def build_recommendation(
         "macd_signal": macd_signal, "macd_hist": macd_hist, "rsi": rsi,
         "volume_ratio": volume_ratio, "bollinger_lower": bollinger_lower,
         "breakout_level": breakout_level, "volatility": volatility,
+        "atr": atr,
     }).dropna(subset=["price", "short", "long", "macd_hist", "rsi"])
     if len(frame) < 2:
         raise ValueError("有效数据不足，无法生成投资建议")
@@ -76,6 +96,7 @@ def build_recommendation(
     macd_bullish = latest["macd"] > latest["macd_signal"] and latest["macd_hist"] >= previous["macd_hist"]
     deviation = price / short_value - 1
     volume_ok = pd.notna(latest["volume_ratio"]) and latest["volume_ratio"] >= config["volume_ratio"]
+    atr_value = float(latest["atr"]) if pd.notna(latest["atr"]) else price * 0.03
     conditions: dict[str, bool] = {}
     reasons: list[str] = []
 
@@ -133,6 +154,8 @@ def build_recommendation(
         }
         hard_sell = not trend_up and macd_value < 0 and rsi_value < 45
 
+    if market_regime is not None:
+        conditions["沪深300环境过滤"] = bool(market_regime.get("trend_ok", False))
     passed = sum(bool(value) for value in conditions.values())
     all_passed = passed == len(conditions)
     if all_passed:
@@ -146,11 +169,17 @@ def build_recommendation(
     reasons.extend(f"未满足：{name}" for name in failed)
 
     is_entry_candidate = signal == "买入候选"
-    stop_pct = float(config["stop_loss_pct"])
-    target_pct = float(config["take_profit_pct"])
+    stop_multiple = float(config.get("atr_stop_multiple", ATR_STOP_MULTIPLES.get(strategy_name, 2.0)))
+    reward_risk = float(config.get("reward_risk", 2.0))
+    risk_per_trade = float(config.get("risk_per_trade_pct", 0.01))
+    stop_distance = max(atr_value * stop_multiple, price * 0.02)
     entry = price if is_entry_candidate else None
-    stop = price * (1 - stop_pct) if is_entry_candidate else None
-    target = price * (1 + target_pct) if is_entry_candidate else None
+    stop = max(price - stop_distance, price * 0.85) if is_entry_candidate else None
+    target = price + stop_distance * reward_risk if is_entry_candidate else None
+    suggested_position = min(
+        float(config.get("max_position_pct", 0.5)),
+        max(0.0, risk_per_trade / (stop_distance / price)),
+    ) if is_entry_candidate else 0.0
     watch_price = short_value if signal == "观望" else None
     return {
         "model_name": strategy_name, "date": latest["日期"].strftime("%Y-%m-%d"),
@@ -159,6 +188,9 @@ def build_recommendation(
         "deviation": deviation, "volume_ratio": float(latest["volume_ratio"]) if pd.notna(latest["volume_ratio"]) else None,
         "score": int(round(passed / len(conditions) * 100)), "signal": signal, "action": action,
         "entry": entry, "watch_price": watch_price, "stop": stop, "target": target,
+        "atr": atr_value, "atr_stop_multiple": stop_multiple,
+        "reward_risk": reward_risk, "suggested_position_pct": suggested_position,
+        "market_regime": dict(market_regime) if market_regime is not None else None,
         "conditions": conditions, "reasons": reasons,
         "failed_conditions": failed,
     }

@@ -4,6 +4,7 @@ import pandas as pd
 import streamlit as st
 from lightweight_charts_v5 import lightweight_charts_v5_component
 
+from asset_fetcher import fetch_index_data
 from data_fetcher import fetch_stock_data
 from fundamentals import fetch_fundamental_snapshot
 from indicators import calculate_rsi, calculate_sma
@@ -63,6 +64,10 @@ with st.sidebar:
 
     st.subheader("RSI")
     rsi_period = st.slider("RSI周期", 2, 50, 14, key="chart_rsi_period")
+    market_filter_enabled = st.checkbox(
+        "启用沪深300环境过滤", value=True,
+        help="大盘跌破60日均线时，不给出主动买入候选。",
+    )
 
 
 @st.cache_data(ttl=3600, show_spinner=False)
@@ -122,6 +127,23 @@ def load_fundamentals(symbol: str, fallback_name: str | None = None) -> dict:
     return fetch_fundamental_snapshot(symbol, fallback_name=fallback_name)
 
 
+@st.cache_data(ttl=900, show_spinner=False)
+def load_market_regime() -> dict:
+    benchmark = fetch_index_data("000300", years=1)
+    close = pd.to_numeric(benchmark["收盘"], errors="coerce").dropna()
+    if len(close) < 60:
+        raise ValueError("沪深300有效数据不足60个交易日")
+    ma60 = close.rolling(60).mean().iloc[-1]
+    return {
+        "symbol": "000300",
+        "trend_ok": bool(close.iloc[-1] > ma60),
+        "price": float(close.iloc[-1]),
+        "sma60": float(ma60),
+        "date": pd.to_datetime(benchmark["日期"].iloc[-1]).strftime("%Y-%m-%d"),
+        "source": benchmark.attrs.get("data_source", "未知"),
+    }
+
+
 try:
     with st.spinner(f"正在加载 {stock_code} 的历史数据..."):
         data = load_stock_data(stock_code).copy()
@@ -141,6 +163,17 @@ if st.session_state.get(f10_requested_key, False):
         fundamentals = load_fundamentals(stock_code, selected_stock.get("name"))
     except Exception as error:
         st.markdown(f"> **F10 基本面暂不可用：** `{error}`。技术建议不会据此假设公司盈利或估值安全。")
+
+market_regime = None
+if market_filter_enabled:
+    try:
+        market_regime = load_market_regime()
+        st.sidebar.caption(
+            f"沪深300环境：{'偏强' if market_regime['trend_ok'] else '偏弱'} "
+            f"（{market_regime['date']}，数据源：{market_regime['source']}）"
+        )
+    except Exception as error:
+        st.sidebar.warning(f"大盘过滤暂不可用：{error}")
 
 
 def _series_records(frame: pd.DataFrame, value_column: str) -> list[dict]:
@@ -188,6 +221,7 @@ for model_name in STRATEGY_NAMES:
             strategy_name=model_name,
             strategy_config=model,
             fundamental_metrics=fundamentals,
+            market_regime=market_regime,
         )
     except ValueError as error:
         recommendation_errors[model_name] = str(error)
@@ -414,8 +448,11 @@ for model_tab, model_name in zip(model_tabs, STRATEGY_NAMES):
         if recommendation["signal"] == "买入候选":
             st.markdown(
                 f"**参考成交价：** {recommendation['entry']:.2f}　"
-                f"**止损：** {recommendation['stop']:.2f}　"
-                f"**止盈：** {recommendation['target']:.2f}"
+                f"**ATR：** {recommendation['atr']:.2f}　"
+                f"**建议仓位：** {recommendation['suggested_position_pct']:.0%}  \n"
+                f"**动态止损：** {recommendation['stop']:.2f}　"
+                f"**风险收益目标：** {recommendation['target']:.2f} "
+                f"（{recommendation['reward_risk']:.1f}:1）"
             )
         elif recommendation.get("watch_price") is not None:
             st.markdown(f"**观察/回踩参考价：** {recommendation['watch_price']:.2f}（不是建仓指令）")
