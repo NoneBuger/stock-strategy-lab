@@ -4,6 +4,9 @@ from __future__ import annotations
 
 from datetime import date
 import inspect
+import json
+import urllib.parse
+import urllib.request
 from dateutil.relativedelta import relativedelta
 
 import pandas as pd
@@ -125,6 +128,66 @@ def _fetch_index(symbol: str, start: date, end: date) -> pd.DataFrame:
     return _rename_history(frame)
 
 
+def _fetch_index_eastmoney(symbol: str, start: date, end: date) -> pd.DataFrame:
+    """Fetch index candles from Eastmoney's public history endpoint."""
+    market = "1" if symbol.startswith(("0", "5", "6", "8", "9")) and not symbol.startswith(("399", "899")) else "0"
+    query = urllib.parse.urlencode({
+        "secid": f"{market}.{symbol}",
+        "klt": "101",
+        "fqt": "0",
+        "beg": start.strftime("%Y%m%d"),
+        "end": end.strftime("%Y%m%d"),
+        "fields1": "f1,f2,f3,f4,f5,f6",
+        "fields2": "f51,f52,f53,f54,f55,f56,f57,f58,f59,f60,f61",
+    })
+    url = f"https://push2his.eastmoney.com/api/qt/stock/kline/get?{query}"
+    request = urllib.request.Request(
+        url,
+        headers={"User-Agent": "Mozilla/5.0 (compatible; stock-strategy-lab/1.0)"},
+    )
+    with urllib.request.urlopen(request, timeout=8) as response:
+        payload = json.loads(response.read().decode("utf-8-sig"))
+    data = payload.get("data") if isinstance(payload, dict) else None
+    klines = data.get("klines") if isinstance(data, dict) else None
+    if not klines:
+        raise ValueError("东方财富未返回指数K线")
+    rows = []
+    for line in klines:
+        fields = str(line).split(",")
+        if len(fields) < 6:
+            continue
+        rows.append({
+            "日期": fields[0], "开盘": fields[1], "收盘": fields[2],
+            "最高": fields[3], "最低": fields[4], "成交量": fields[5],
+        })
+    return _rename_history(pd.DataFrame(rows))
+
+
+def _fetch_index_baostock(symbol: str, start: date, end: date) -> pd.DataFrame:
+    """Optional no-token fallback for index history."""
+    import baostock as bs
+
+    market = "sh" if symbol.startswith(("0", "5", "6", "8", "9")) and not symbol.startswith(("399", "899")) else "sz"
+    login = bs.login()
+    if getattr(login, "error_code", "0") != "0":
+        raise RuntimeError(f"Baostock登录失败：{getattr(login, 'error_msg', '未知错误')}")
+    try:
+        result = bs.query_history_k_data_plus(
+            f"{market}.{symbol}", "date,open,high,low,close,volume",
+            start_date=start.isoformat(), end_date=end.isoformat(),
+            frequency="d", adjustflag="3",
+        )
+        if getattr(result, "error_code", "0") != "0":
+            raise RuntimeError(f"Baostock指数查询失败：{getattr(result, 'error_msg', '未知错误')}")
+        frame = result.get_data()
+    finally:
+        bs.logout()
+    return _rename_history(frame.rename(columns={
+        "date": "日期", "open": "开盘", "high": "最高", "low": "最低",
+        "close": "收盘", "volume": "成交量",
+    }))
+
+
 def fetch_fund_data(symbol: str, years: int = 3) -> pd.DataFrame:
     start, end = date.today() - relativedelta(years=years), date.today()
     errors = []
@@ -141,10 +204,17 @@ def fetch_fund_data(symbol: str, years: int = 3) -> pd.DataFrame:
 
 def fetch_index_data(symbol: str, years: int = 3) -> pd.DataFrame:
     start, end = date.today() - relativedelta(years=years), date.today()
-    try:
-        data = _fetch_index(symbol, start, end)
-        data.attrs["data_source"] = "AkShare中国指数历史行情"
-        data.attrs["asset_type"] = "指数"
-        return data
-    except Exception as error:
-        raise RuntimeError(f"指数 {symbol} 暂无可用历史数据：{error}") from error
+    errors = []
+    for source, loader in (
+        ("东方财富公开指数K线", _fetch_index_eastmoney),
+        ("Baostock指数历史行情", _fetch_index_baostock),
+        ("AkShare中国指数历史行情", _fetch_index),
+    ):
+        try:
+            data = loader(symbol, start, end)
+            data.attrs["data_source"] = source
+            data.attrs["asset_type"] = "指数"
+            return data
+        except Exception as error:
+            errors.append(f"{source}: {error}")
+    raise RuntimeError(f"指数 {symbol} 暂无可用历史数据：{' | '.join(errors)}")
