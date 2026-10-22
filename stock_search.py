@@ -20,6 +20,14 @@ def search_stock_candidates(query: str, limit: int = 20) -> list[dict[str, str]]
     else:
         code_fallback = None
 
+    # An exact code is already sufficient to load history and F10 data. Do
+    # not block the first page render on downloading the entire stock list.
+    if code_fallback:
+        return [{
+            "code": code_fallback,
+            "name": OFFLINE_STOCK_NAMES.get(code_fallback, "代码匹配（名称待数据源返回）"),
+        }]
+
     candidates: dict[str, str] = {}
     for code, name in OFFLINE_STOCK_NAMES.items():
         if query in code.lower() or query in name.lower():
@@ -57,6 +65,4 @@ def search_stock_candidates(query: str, limit: int = 20) -> list[dict[str, str]]
         {"code": code, "name": name}
         for code, name in sorted(candidates.items())
     ][: max(1, limit)]
-    if not results and code_fallback:
-        return [{"code": code_fallback, "name": "代码匹配（名称待数据源返回）"}]
     return results

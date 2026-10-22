@@ -129,11 +129,18 @@ except Exception as error:
     st.markdown(f"> **获取股票数据失败：** `{error}`")
     st.stop()
 
-try:
-    fundamentals = load_fundamentals(stock_code, selected_stock.get("name"))
-except Exception as error:
-    fundamentals = None
-    st.markdown(f"> **F10 基本面暂不可用：** `{error}`。技术建议不会据此假设公司盈利或估值安全。")
+with st.sidebar:
+    f10_requested_key = f"f10_requested_{stock_code}"
+    if st.button("加载/刷新 F10 基本面", use_container_width=True, key=f"load_f10_{stock_code}"):
+        st.session_state[f10_requested_key] = True
+        load_fundamentals.clear()
+
+fundamentals = None
+if st.session_state.get(f10_requested_key, False):
+    try:
+        fundamentals = load_fundamentals(stock_code, selected_stock.get("name"))
+    except Exception as error:
+        st.markdown(f"> **F10 基本面暂不可用：** `{error}`。技术建议不会据此假设公司盈利或估值安全。")
 
 
 def _series_records(frame: pd.DataFrame, value_column: str) -> list[dict]:
@@ -357,7 +364,7 @@ with st.expander("📋 F10 基本面快照与排雷", expanded=True):
         else:
             st.success("当前可用 F10 字段未触发基础排雷规则；仍需结合财报和公告核实。")
     else:
-        st.markdown("> 当前没有足够的 F10 数据，基本面模型不会假设其盈利或估值安全。")
+        st.markdown("> F10默认按需加载，以避免阻塞行情页面。请点击左侧“加载/刷新 F10 基本面”获取行业、PE、ROE和利润信息。")
 
 st.divider()
 st.subheader("📌 六模型投资建议参考")

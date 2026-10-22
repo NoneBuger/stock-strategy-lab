@@ -44,7 +44,7 @@ def _eastmoney_code(symbol: str) -> str:
     return f"SH{symbol}" if symbol.startswith(("5", "6", "9")) else f"SZ{symbol}"
 
 
-def _public_json(url: str, timeout: int = 12, retries: int = 2) -> Any:
+def _public_json(url: str, timeout: int = 8, retries: int = 1) -> Any:
     """Read a public JSON/JSONP endpoint with bounded retry and backoff."""
     last_error: Exception | None = None
     for attempt in range(retries + 1):

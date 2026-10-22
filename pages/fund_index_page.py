@@ -29,7 +29,18 @@ asset_type = st.sidebar.selectbox("资产类型", ["基金", "指数"])
 years = st.sidebar.slider("历史数据年数", 1, 10, 3)
 query = st.text_input("搜索基金名称/代码或指数名称/代码", "沪深300" if asset_type == "指数" else "510300")
 
-candidates = search_fund_candidates(query) if asset_type == "基金" else search_index_candidates(query)
+@st.cache_data(ttl=21600, show_spinner=False)
+def cached_candidates(kind: str, text: str) -> list[dict[str, str]]:
+    return search_fund_candidates(text) if kind == "基金" else search_index_candidates(text)
+
+
+@st.cache_data(ttl=900, show_spinner=False)
+def cached_asset_data(kind: str, code: str, history_years: int):
+    return (fetch_fund_data(code, history_years) if kind == "基金"
+            else fetch_index_data(code, history_years))
+
+
+candidates = cached_candidates(asset_type, query)
 if not candidates:
     st.warning("没有找到匹配项。基金搜索依赖 AkShare 基金列表；指数目前支持常用A股指数。")
     st.stop()
@@ -39,8 +50,7 @@ selected = st.selectbox(
 
 try:
     with st.spinner(f"正在加载 {selected['name']} 历史数据..."):
-        data = (fetch_fund_data(selected["code"], years) if asset_type == "基金"
-                else fetch_index_data(selected["code"], years))
+        data = cached_asset_data(asset_type, selected["code"], years)
     recommendation = build_fund_index_recommendation(data, asset_type)
 except Exception as error:
     st.error(f"数据或指标计算失败：{error}")
