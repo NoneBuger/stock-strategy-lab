@@ -31,6 +31,7 @@ st.markdown(
 )
 st.title("股票行情分析")
 st.sidebar.page_link("pages/ai_analysis_page.py", label="AI智能分析", icon="🤖")
+st.sidebar.page_link("pages/fund_index_page.py", label="基金与指数分析", icon="📊")
 st.page_link("pages/ai_analysis_page.py", label="打开 AI 智能分析", icon="🤖")
 
 watchlist = st.session_state.setdefault("watchlist", {"000001": "平安银行"})
